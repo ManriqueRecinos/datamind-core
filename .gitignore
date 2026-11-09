@@ -1,0 +1,54 @@
+# ==============================================================================
+# Gitignore Oficial para Microservicio Python (DataMind Core RAG)
+# ==============================================================================
+
+# Byte-compiled / optimized / cache files (incluye __pycache__ y *.pyc)
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+coverage.xml
+*.cover
+
+# Entornos virtuales locales y dependencias
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Variables de entorno y credenciales (mantener .env.example público)
+.env
+.env.*
+!.env.example
+
+# IDEs, editores y sistema operativo
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Logs y bases de datos locales temporales
+*.log
+*.sqlite
+*.sqlite3
+
+# Herramientas de soporte del agente
+.opencode/
+reporte_test.xlsx
+datamind_report_*.xlsx

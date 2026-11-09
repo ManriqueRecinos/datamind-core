@@ -1,0 +1,180 @@
+openapi: 3.1.0
+info:
+  title: AI Chat & Analytics Service API
+  version: 1.0.0
+  description: Microservice providing conversational RAG over business process knowledge and MariaDB data with Excel generation.
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local FastAPI service
+
+paths:
+  /chat:
+    post:
+      summary: Send a conversational message (Synchronous JSON)
+      operationId: sendChatMessage
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Successful AI response with optional dataset reference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '422':
+          description: Validation error in request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '500':
+          description: Internal server error or query failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /chat/stream:
+    post:
+      summary: Send a conversational message with real-time SSE token streaming
+      operationId: streamChatMessage
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Server-Sent Events stream containing partial tokens, metadata, and final dataset references
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Stream of event blocks (see sse-events.md)
+
+  /export/excel/{dataset_id}:
+    get:
+      summary: Download formatted Excel report for a previously executed query dataset
+      operationId: downloadExcelReport
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: dataset_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "ds_a8b9c0d1e2f3"
+      responses:
+        '200':
+          description: Binary Excel file (.xlsx) with styled columns, auto-filters, and corporate header
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="reporte_proceso_20261106_1530.xlsx"'
+        '404':
+          description: Dataset ID not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    ChatRequest:
+      type: object
+      required:
+        - prompt
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          description: Optional session ID to continue an existing conversation
+        user_id:
+          type: string
+          description: Laravel user identifier for auditing
+          example: "user_42"
+        prompt:
+          type: string
+          description: Plain natural language user query in Spanish or English
+          example: "¿Cuáles son las 5 órdenes con más retraso en el área de corte?"
+
+    ChatResponse:
+      type: object
+      required:
+        - message
+        - session_id
+        - intent
+        - has_tabular_data
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        message:
+          type: string
+          description: Humanized AI response formatted in Markdown
+        intent:
+          type: string
+          enum: [process_qa, data_query, general_chat]
+        has_tabular_data:
+          type: boolean
+          description: True if the query produced structured rows capable of Excel export
+        dataset_id:
+          type: string
+          nullable: true
+          description: Token used to request the Excel download
+          example: "ds_a8b9c0d1e2f3"
+        row_count:
+          type: integer
+          nullable: true
+          example: 5
+        generated_sql:
+          type: string
+          nullable: true
+          description: Safe SELECT statement executed (if intent was data_query)
+        latency_ms:
+          type: integer
+          example: 842
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+        - code
+        - timestamp
+      properties:
+        detail:
+          type: string
+        code:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
