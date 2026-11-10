@@ -9,7 +9,7 @@ Stores source corporate documentation, process manuals, policies, and MariaDB da
 | :--- | :--- | :--- | :--- |
 | `id` | UUID | Primary Key, Default `gen_random_uuid()` | Unique document identifier |
 | `title` | VARCHAR(255) | NOT NULL | Human-readable title of process or manual |
-| `category` | VARCHAR(50) | NOT NULL, Indexed | e.g. `process_manual`, `policy`, `db_schema`, `workflow` |
+| `category` | VARCHAR(50) | NOT NULL, Indexed | `process_manual`, `policy`, `db_schema`, `custom_relation`, `business_rule`, `kpi_formula`, `sql_example` |
 | `department` | VARCHAR(100) | NOT NULL, Indexed | Department owning the process (e.g., `Logística`, `Ventas`) |
 | `content` | TEXT | NOT NULL | Full source text |
 | `metadata` | JSONB | NOT NULL, Default `'{}'` | Arbitrary structured metadata (version, author, related_tables) |
@@ -57,7 +57,7 @@ Maintains conversational history for multi-turn context and auditing.
 | `session_id` | UUID | Foreign Key -> `chat_sessions.id` ON DELETE CASCADE | Parent session |
 | `role` | VARCHAR(20) | NOT NULL | `user`, `assistant`, or `system` |
 | `content` | TEXT | NOT NULL | Message body (Markdown supported) |
-| `intent` | VARCHAR(50) | NULL | `process_qa`, `data_query`, `general_chat` |
+| `intent` | VARCHAR(50) | NULL | `process_qa`, `data_query`, `general_chat`, `teach_knowledge` |
 | `generated_sql` | TEXT | NULL | Cleaned, validated SQL query executed (if applicable) |
 | `dataset_id` | VARCHAR(64) | NULL, Indexed | Reference to cached tabular data for Excel generation |
 | `latency_ms` | INTEGER | NULL | Total processing time in milliseconds |
