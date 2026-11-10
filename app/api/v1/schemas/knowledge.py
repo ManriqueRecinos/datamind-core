@@ -58,3 +58,20 @@ class SchemaSyncResponse(BaseModel):
     database: str
     tables_indexed: int
     tables: List[str]
+
+
+class TrainKnowledgeRequest(BaseModel):
+    """Solicitud estructurada para enseñar una regla, relación, fórmula o SQL de ejemplo a la IA."""
+    category: str = Field(
+        default="business_rule",
+        description="Categoría: custom_relation, business_rule, kpi_formula, sql_example"
+    )
+    title: str = Field(..., min_length=3, max_length=255, description="Título descriptivo de la enseñanza")
+    content: str = Field(..., min_length=5, description="Regla, relación, fórmula o consulta SQL de ejemplo")
+    connection_id: Optional[str] = Field(default=None, description="ID de conexión asociada (opcional)")
+    source_table: Optional[str] = Field(default=None, description="Tabla origen si es custom_relation")
+    source_column: Optional[str] = Field(default=None, description="Columna llave foránea si es custom_relation")
+    target_table: Optional[str] = Field(default=None, description="Tabla maestra destino si es custom_relation")
+    target_column: Optional[str] = Field(default="id", description="Columna llave primaria destino")
+    label_column: Optional[str] = Field(default=None, description="Columna con el nombre legible en la tabla maestra")
+    sql_query: Optional[str] = Field(default=None, description="Consulta SELECT verificada cuando category=sql_example")
