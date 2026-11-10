@@ -211,6 +211,7 @@ class ManageConnectionsUseCase:
             related_tables = t.get("related_tables", [])
 
             enriched_tables.append({
+                "schema_name": t.get("schema_name") or "public",
                 "table_name": t_name,
                 "primary_key": t.get("primary_key", "id"),
                 "descriptive_columns": t.get("descriptive_columns", []),
@@ -335,6 +336,7 @@ class ManageConnectionsUseCase:
 
         for table in matched_tables:
             t_name = table["table_name"]
+            s_name = table.get("schema_name") or ("public" if adapter.is_postgres else "default")
             content, join_hints = self.build_relational_schema_embedding_text(
                 conn_name=conn_model.name,
                 engine_label=engine_label,
@@ -352,6 +354,7 @@ class ManageConnectionsUseCase:
                     "connection_name": conn_model.name,
                     "engine": conn_model.engine,
                     "database_name": conn_model.database_name,
+                    "schema_name": s_name,
                     "table_name": t_name,
                     "primary_key": table.get("primary_key", "id"),
                     "descriptive_columns": table.get("descriptive_columns", []),

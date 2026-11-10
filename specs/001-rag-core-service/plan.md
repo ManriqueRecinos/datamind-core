@@ -538,3 +538,333 @@ Para que el usuario pueda entrenar a la IA con precisión quirúrgica, estructur
 | **Commit 3** | `v1.0.6` | `feat(ui): add rich Markdown renderer, relational table badges and AI Training Center modal (v1.0.6)` | `resources/views/chat/index.blade.php`<br>`public/css/global_styles/globales.css`<br>`resources/css/global_styles/globales.css`<br>`public/js/connections_manager.js` | Añade estilos GFM para Markdown, badges de relaciones `JOIN` detectadas en `/connections` y el modal interactivo **`🎓 Entrenar IA`** con las 4 plantillas guiadas y currículo de 5 niveles. |
 | **Commit 4** | `v1.0.7` | `feat(analytics): implement 2-step guided chart builder, on-demand table/chart toggles and chat teaching (v1.0.7)` | `public/js/chat_stream.js` | Constructor interactivo `Chart.js` (Opción A en 2 pasos), apertura inteligente de tabla/gráfico solo cuando el usuario lo pide (`wants_table`/`wants_chart`), historial en sidebar y botón *"🧠 Enseñar este SQL a la IA"*. |
 | **Commit 5** | `v1.0.8` | `docs(release): update feature tests, AGENTS.md and README documentation for v1.0.8` | `tests/Feature/ChatTest.php`<br>`AGENTS.md`<br>`README.md` | Pruebas de integración en PHPUnit (`11 passed`) y documentación actualizada a la versión `1.0.8`. |
+
+---
+
+## Phase 18: Arquitectura UI/UX de Ecosistemas Modulares, Doble Navbar Contextual, Sidebars Escalables y Motor Dinámico de Colores/Tipografía/Tema (`v1.1.0`)
+
+**Objective**: Transformar la interfaz de `datamind-studio` (tanto en el Chat como en Creación/Vectorización de Bases de Datos y la nueva vista de Configuración) en una **arquitectura de 3 Ecosistemas Modulares**, con un **Navbar Superior Unificado**, un **Mini-Navbar Contextual de Ubicación**, un **Sidebar exclusivo y escalable en cada Ecosistema**, y un **Motor Reactivo de Personalización Visual** que permita configurar los 5 colores base de la aplicación, el tamaño de texto, la fuente tipográfica y el tema (Claro / Oscuro) en tiempo real.
+
+### 1. Arquitectura de Navegación en 2 Niveles (Top Navbar + Mini-Nav de Posición)
+
+```mermaid
+flowchart TD
+    subgraph TopHeader["1. Navbar Superior Global (Sticky)"]
+        Brand["🧠 Identidad DataMind"]
+        EcoSwitcher["🌐 Selector de Ecosistemas (Pills + Dropdown):<br/>1. 💬 Chat & IA  |  2. 🗄️ Vectorización & DBs  |  3. ⚙️ Configuración"]
+        StatusAndProfile["🟢 Estado Motor IA + 👤 Menú Mi Perfil<br/>(Ver mi perfil, Cambiar Ecosistema, Tema Rápido, Cerrar Sesión)"]
+    end
+
+    subgraph SubHeader["2. Mini-Navbar Contextual ('Dónde estoy posicionado')"]
+        LocationTrail["📍 Ecosistema Activo  ›  Sección / Módulo Actual  ›  Elemento Activo (ej. BD o Sesión)"]
+        QuickContextBar["⚡ Indicadores del Ecosistema (ej. BD Activa, Tablas Vectorizadas o Paleta Activa)"]
+    end
+
+    subgraph Workspace["3. Cuerpo del Ecosistema (Sidebar Escalable + Lienzo Principal)"]
+        Sidebar["📑 Sidebar Modular del Ecosistema<br/>(Con secciones actuales + ranuras para futuros módulos)"]
+        MainCanvas["🖥️ Vista Principal del Módulo Seleccionado"]
+    end
+
+    TopHeader --> SubHeader --> Workspace
+```
+
+1. **Nivel 1 — Navbar Superior Global (`resources/views/components/ecosystem-navbar.blade.php`)**:
+   - **Izquierda**: Logotipo dinámico (cambia su icono según el ecosistema activo) + título del sistema.
+   - **Centro — Conmutador de los 3 Ecosistemas (`Ecosystem Switcher`)**:
+     - Pestañas/Pills visuales de acceso directo:
+       - **`💬 Ecosistema Chat`** (`/chat`)
+       - **`🗄️ Ecosistema Vectorización`** (`/connections`)
+       - **`⚙️ Ecosistema Configuración`** (`/settings`)
+   - **Derecha — Estado del Motor + Menú Desplegable de Usuario**:
+     - Badge en vivo `Motor IA Activo / Offline`.
+     - **Dropdown de Usuario y Perfil**:
+       - `👤 Ver mi Perfil y Cuenta` (abre la sección de perfil en `/settings#perfil` o modal rápido).
+       - `🔄 Cambiar de Ecosistema` (accesos directos a Chat, Vectorización y Configuración).
+       - `🎨 Apariencia Rápida` (toggle instantáneo Claro/Oscuro).
+       - `🚪 Cerrar Sesión` (`POST /logout`).
+
+2. **Nivel 2 — Mini-Navbar Contextual de Posición ("Ruta Humana, no URL técnica")**:
+   - Ubicado inmediatamente debajo del Navbar principal (`h-10`), con fondo suave `var(--datamind-bg-neutral)` y bordes dinámicos:
+   - Muestra de forma amigable **en qué ecosistema y herramienta estás parado** (actualizándose en vivo cuando cambias de pestaña en el sidebar):
+     - *En Chat*: `💬 Ecosistema de Chat & Analítica`  ›  `Consola Conversacional RAG & SQL`  ›  `BD Activa: ERP Corporativo`
+     - *En Vectorización*: `🗄️ Ecosistema de Vectorización & DBs`  ›  `Explorador y Vectorización de Tablas`  ›  `34 tablas detectadas`
+     - *En Configuración*: `⚙️ Ecosistema de Configuración`  ›  `Personalización de Colores, Tipografía y Tema`  ›  `Paleta Activa: Personalizada`
+
+---
+
+### 2. Diseño de los 3 Ecosistemas y sus Sidebars Escalables
+
+Cada ecosistema tiene su propio **Sidebar Izquierdo Colapsable y Escalable**, diseñado con grupos de navegación (`Módulos Principales`, `Herramientas Activas`, `Próximas Expansiones`) para que puedas ir agregando nuevas opciones en el futuro sin romper el diseño:
+
+#### A. Ecosistema 1: Chat & Analítica Inteligente (`/chat`)
+- **Sidebar del Ecosistema Chat**:
+  1. **Navegación del Ecosistema**:
+     - `💬 Consola de Chat IA` (Vista principal de conversación, tablas bajo demanda y gráficos).
+     - `🎓 Centro de Entrenamiento IA` (Abre el entrenador de relaciones `JOIN`, estados, fórmulas y Golden SQL).
+     - `⚡ Consultas Rápidas Sugeridas` (Atajos configurables para análisis frecuentes).
+  2. **Historial de Conversaciones (`Mis Conversaciones`)**:
+     - Buscador rápido de sesiones + lista desplazable con contador de mensajes y botón `+ Nuevo Chat`.
+  3. **Bloque Escalable (`Módulos del Ecosistema`)**:
+     - Preparado para agregar en el futuro *Reportes Programados*, *Dashboards Guardados*, *Alertas SQL*, etc.
+- **Mejoras UX en el Área de Chat**:
+  - Cabecera interna limpia con selector de base de datos activa e indicador de formato (`Texto`, `Tabla`, `Gráfico`).
+  - Burbujas, bordes, chips de selección de campos y gráficos sincronizados al 100% con los colores y tamaño de fuente elegidos por el usuario.
+
+#### B. Ecosistema 2: Vectorización y Gestión de Bases de Datos (`/connections`)
+- **Sidebar del Ecosistema Vectorización** (Reemplaza el antiguo layout rígido de 2 columnas amontonadas por una navegación limpia por módulos dentro del ecosistema):
+  1. **Módulos de Base de Datos**:
+     - `🗄️ Mis Bases de Datos Conectadas` (Tarjetas de estado, motor MariaDB/PostgreSQL, latencia, activar en chat).
+     - `➕ Nueva Conexión y Test en Vivo` (Formulario dedicado y espacioso para registrar y probar credenciales sin saturar la pantalla).
+  2. **Módulos de Vectorización (`pgvector`)**:
+     - `🧠 Explorador y Vectorización de Tablas` (Vista amplia de extremo a extremo para inspeccionar columnas, ver comentarios y vectorizar lotes en `pgvector`).
+     - `🔗 Mapa de Relaciones JOIN Detectadas` (Filtro rápido para ver qué tablas tienen relaciones `FOREIGN KEY` o `id_*` aprendidas).
+     - `🎓 Reglas y Diccionario de la BD` (Acceso directo a las cápsulas enseñadas para esta conexión).
+  3. **Bloque Escalable (`Expansiones Futuras`)**:
+     - Espacio listo para agregar *Sincronización Automática (Cron)*, *Auditoría de Consultas SQL*, *Importación de Documentos PDF/Manuales*, etc.
+
+#### C. Ecosistema 3: Configuración, Apariencia y Perfil (`/settings`)
+- **Nueva Ruta y Controlador**: `GET /settings` (`SettingsController@index`), `POST /settings/preferences` (`SettingsController@updatePreferences`), `POST /settings/profile` (`SettingsController@updateProfile`).
+- **Sidebar del Ecosistema Configuración**:
+  1. `🎨 Colores y Paleta de la Aplicación`
+  2. `🔤 Tipografía y Tamaño de Texto`
+  3. `🌓 Tema Visual (Claro / Oscuro / Contraste)`
+  4. `👤 Mi Perfil y Seguridad de Cuenta`
+  5. *Espacio escalable para futuras configuraciones (Modelos Ollama, Límites SQL, API Keys, Notificaciones)*.
+
+---
+
+### 3. Motor Dinámico de Colores, Tipografía, Tamaño de Texto y Tema (`theme_manager.js` + CSS Variables)
+
+Actualmente `resources/css/app.css` tenía colores estáticos compilados en `@theme` (`#0476D9`), lo que impedía que todas las clases de Tailwind (`bg-datamind-primary`, `text-datamind-dark`, `border-datamind-light`) cambiaran dinámicamente cuando el usuario edita las variables CSS.
+
+**Solución Técnica Definitiva en Fase 18**:
+1. **Vincular Tailwind v4 `@theme` directamente a Variables CSS Dinámicas (`resources/css/app.css` y `globales.css`)**:
+   - Definir en `@theme inline`:
+     - `--color-datamind-primary: var(--datamind-primary);`
+     - `--color-datamind-dark: var(--datamind-primary-dark);`
+     - `--color-datamind-secondary: var(--datamind-secondary);`
+     - `--color-datamind-light: var(--datamind-accent-light);`
+     - `--color-datamind-neutral: var(--datamind-bg-neutral);`
+   - Así, **cualquier cambio en los selectores de color actualiza al instante el 100% de la aplicación** (botones, fondos, bordes, badges, burbujas del chat, barras del gráfico `Chart.js` y tablas).
+2. **Controles Interactivos en el Ecosistema de Configuración (`/settings`)**:
+   - **5 Presets Profesionales con 1 Clic + Personalizador Libre (Color Pickers Hex)**:
+     1. 🌊 **DataMind Ocean (Oficial)**: `#0476D9` / `#0468BF` / `#4B89BF` / `#99D0F2` / `#F2F2F2`
+     2. 🌿 **Emerald Analytics**: `#059669` / `#047857` / `#34D399` / `#A7F3D0` / `#F0FDF4`
+     3. 🔮 **Royal Indigo AI**: `#4F46E5` / `#4338CA` / `#818CF8` / `#C7D2FE` / `#F5F3FF`
+     4. 🔥 **Executive Amber & Slate**: `#D97706` / `#B45309` / `#F59E0B` / `#FDE68A` / `#FFFBEB`
+     5. 🖤 **Minimalist Graphite**: `#334155` / `#1E293B` / `#64748B` / `#CBD5E1` / `#F8FAFC`
+   - **5 Selectores de Color Individuales (`<input type="color">` + código HEX editable)**:
+     - Color Primario Principal (`--datamind-primary`)
+     - Color Primario Oscuro / Hover (`--datamind-primary-dark`)
+     - Color Secundario (`--datamind-secondary`)
+     - Color de Acento Suave / Bordes (`--datamind-accent-light`)
+     - Color de Fondo Neutro (`--datamind-bg-neutral`)
+   - **Control de Tamaño de Texto Global (`--datamind-font-scale` / `html { font-size }`)**:
+     - `Compacto (13px / 92%)` | `Estándar (14px / 100%)` | `Cómodo (15px / 107%)` | `Grande / Lectura (16px / 114%)`.
+   - **Control de Fuente Tipográfica (`--datamind-font-family`)**:
+     - `Moderna Corporativa (Inter / Instrument Sans)` | `Nativa del Sistema (Segoe UI / System)` | `Técnica Desarrollador (JetBrains / Monospace)` | `Editorial Clásica (Georgia / Serif)`.
+   - **Modo de Tema (`Claro`, `Oscuro Nocturno`)**:
+     - Ajusta superficies de tarjetas, textos y contrastes automáticamente.
+   - **Vista Previa en Vivo + Botón `Restaurar Valores Originales`**:
+     - Tarjeta interactiva dentro de `/settings` donde el usuario ve en tiempo real cómo lucen los botones, burbujas del chat, badges y tablas mientras mueve los colores o el tamaño de letra.
+   - **Zero-FOUC Boot Script (`public/js/theme_manager.js`)**:
+     - Se carga en el `<head>` de todas las vistas para aplicar los colores, fuente, tamaño y tema guardados en `localStorage` antes del primer pintado de pantalla (sin parpadeos).
+
+
+---
+
+## Fase 19: Hub Central de Ecosistemas Post-Login y Menús Dinámicos Basados en Base de Datos (`v1.2.0`)
+
+### 1. Visión General y Objetivo
+Transformar el flujo de navegación rígido en una arquitectura desacoplada gobernada por Base de Datos:
+1. **Hub Central de Ecosistemas (`/hub`)**:
+   - Al iniciar sesión exitosamente (o acceder a `/`), el usuario aterriza en una vista minimalista y centrada (idéntica a la maqueta de referencia) con tarjetas visuales de cada ecosistema disponible.
+   - Cada tarjeta muestra su ícono, número/badge de módulo, nombre, descripción detallada y botón de acción interactivo `Ingresar →`.
+2. **Sidebars y Navegación Dinámica 100% Gobernados por BD**:
+   - Eliminar el hardcoding de listas de enlaces en las vistas Blade.
+   - Crear tablas relacionales `ecosystems`, `ecosystem_modules` y `ecosystem_interfaces` que definen la jerarquía operativa de la suite.
+   - Un componente Blade `<x-ecosystem-sidebar :ecosystem="$currentEcosystem" />` renderiza automáticamente los módulos y sus interfaces asociadas según los registros de la BD y su ordenación.
+3. **Sincronización Viva con el Mini-Nav Contextual**:
+   - El Mini-Navbar inferior lee el ecosistema y la interfaz activa directamente desde los modelos de datos de Eloquent.
+
+```mermaid
+graph TD
+    A["Usuario Autenticado"] --> B["GET /hub - Hub Central de Ecosistemas"]
+    B -->|Click Módulo 1| C["Ecosistema Chat (/chat)"]
+    B -->|Click Módulo 2| D["Ecosistema Vectorización (/connections)"]
+    B -->|Click Módulo 3| E["Ecosistema Configuración (/settings)"]
+
+    subgraph "Base de Datos Laravel (SQLite/MySQL/PostgreSQL)"
+        F["ecosystems"] -->|1:N| G["ecosystem_modules"]
+        G -->|1:N| H["ecosystem_interfaces"]
+    end
+
+    C --> I["Sidebar Dinámico: Carga módulos e interfaces desde BD"]
+    D --> I
+    E --> I
+```
+
+### 2. Modelo de Datos Relacional (Migraciones & Eloquent)
+
+#### Tabla `ecosystems`
+- `id` (PK)
+- `key` (string unique: `chat`, `vectorization`, `settings`)
+- `name` (string: `Ecosistema de Chat & Analítica`)
+- `short_name` (string: `Chat & RAG`)
+- `description` (text: `Consultas en lenguaje natural, RAG corporativo y analítica Text-to-SQL.`)
+- `icon` (string: `fa-comments`)
+- `color_preset` (string: `ocean`, `emerald`, `indigo`, `amber`)
+- `badge_text` (string nullable: `Módulo 1`, `RAG & SQL`)
+- `route_name` (string: `chat.index`)
+- `order_num` (integer default 1)
+- `is_active` (boolean default true)
+- `timestamps`
+
+#### Tabla `ecosystem_modules`
+- `id` (PK)
+- `ecosystem_id` (FK -> `ecosystems.id` onDelete cascade)
+- `key` (string: `chat_console`, `training_center`, `quick_queries`, `sessions_history`)
+- `name` (string: `Consola de Chat IA`)
+- `icon` (string: `fa-message`)
+- `order_num` (integer default 1)
+- `is_active` (boolean default true)
+- `timestamps`
+
+#### Tabla `ecosystem_interfaces`
+- `id` (PK)
+- `module_id` (FK -> `ecosystem_modules.id` onDelete cascade)
+- `name` (string: `Nueva Consulta`)
+- `icon` (string: `fa-plus`)
+- `route_or_action` (string: `chat.index` o selector `#btnNewChat` / `#modalTrainingCenter`)
+- `action_type` (enum/string: `route`, `anchor`, `modal`, `tab`)
+- `badge_label` (string nullable: `Pro`, `Nuevo`)
+- `order_num` (integer default 1)
+- `is_active` (boolean default true)
+- `timestamps`
+
+### 3. Modificaciones de Rutas y Controladores
+- **`app/Http/Controllers/AuthController.php`**:
+  - Cambiar redirección post-login: de `intended(route('chat.index'))` a `intended(route('hub.index'))`.
+- **`app/Http/Controllers/HubController.php`** (Nuevo):
+  - `index()`: Obtiene todos los ecosistemas activos con sus módulos (`Ecosystem::with('modules.interfaces')->where('is_active', true)->orderBy('order_num')->get()`) y retorna `resources/views/hub/index.blade.php`.
+- **`resources/views/components/ecosystem-sidebar.blade.php`** (Nuevo):
+  - Recibe el ecosistema actual y dibuja iterativamente los grupos de módulos e interfaces activos desde la BD con enlaces/acciones nativas.
+- **Ruta Raíz `/` y `/hub`**:
+  - `Route::get('/', [HubController::class, 'index'])->name('home');`
+  - `Route::get('/hub', [HubController::class, 'index'])->name('hub.index');`
+
+
+---
+
+## Fase 20: Experiencia de Usuario Full-Screen, Hub Post-Login Obligatorio, Switcher Flotante de Ecosistemas y Rediseño de Vectorización (`v1.3.0`)
+
+### 1. Visión y Objetivos Clave
+
+1. **Pantalla de Login sin Navbar & Chat Híbrido (Con/Sin Sesión)**:
+   - Eliminar el navbar de la vista `auth/login.blade.php`, ofreciendo un lienzo limpio y profesional con acceso directo al chat para usuarios no autenticados o botón de ingresar.
+   - El Chat (`/chat`) debe ser 100% utilizable tanto por usuarios con sesión iniciada como por invitados sin sesión (modo anónimo). Si no hay sesión, almacena temporalmente la conversación y ofrece un llamado sutil para guardar el historial.
+2. **Hub de Ecosistemas Obligatorio Tras Login**:
+   - Inmediatamente después de iniciar sesión o registrarse, la aplicación redirige al usuario **obligatoriamente** al Hub Central (`/hub`), mostrando las tarjetas interactivas de todos los ecosistemas creados y activos.
+3. **Navegación Dinámica por Ecosistema: Carga de Primera Interfaz (`Orden 1`)**:
+   - Al pulsar "Ingresar" en cualquier ecosistema desde el Hub, el sistema carga el Navbar Global, el Context Sub-Nav y el Sidebar Dinámico, y **abre por defecto la primera interfaz operativa (la que tenga `order_num = 1`)**. Si no tuviera orden explícito, se asigna automáticamente.
+4. **Switcher Flotante de Ecosistemas en Navbar (Botón Único con Burbuja Hover)**:
+   - Reemplazar las pestañas fijas de ecosistemas en el navbar central por **un único botón con ícono de ecosistemas** (`fa-shapes` / `fa-cubes` / `fa-layer-group`) que indique el ecosistema actual.
+   - Al poner el cursor encima (`hover`), se despliega una **burbuja flotante animada** con las tarjetas/enlaces de los **otros ecosistemas activos** (excluyendo automáticamente en el que se encuentra posicionado).
+5. **Diseño Full-Screen / Full-Width (Aprovechar el 100% de la Pantalla)**:
+   - Eliminar los contenedores restrictivos `max-w-7xl` con márgenes excesivos a los lados.
+   - Usar `w-full px-4 sm:px-6 lg:px-8` para que el Chat, el Gestor de Vectorización y la Configuración se expandan a lo ancho del monitor, ofreciendo máxima amplitud para tablas, esquemas y visualización de datos.
+6. **Rediseño Intuitivo del Ecosistema de Vectorización (`/connections`)**:
+   - Modernizar la interfaz dividiéndola en un flujo claro por pasos:
+     - **Paso 1: Selector / Estado de la Base de Datos**: Tarjetas compactas de bases de datos conectadas con estado de conexión en vivo.
+     - **Paso 2: Acciones Rápidas (Pestañas / Sub-Vistas)**: `[ + Nueva DB ]` o `[ 🧠 Explorar Tablas ]`.
+     - **Paso 3: Matriz de Vectorización Intuitiva**: Búsqueda instantánea, selección con 1 clic de pares Maestra-Detalle, visualizador de llaves foráneas y barra de progreso de vectorización.
+
+```mermaid
+graph TD
+    A["Usuario Autenticado"] -->|POST /login| B["GET /hub - Hub de Ecosistemas (Obligatorio)"]
+    B -->|Selecciona Ecosistema| C["Carga Vista con Interfaz de Orden 1"]
+    
+    subgraph "Navbar Full-Screen (100% Pantalla)"
+        D["Brand DataMind"] --- E["Botón Único de Ecosistema"]
+        E -->|Hover| F["Burbuja Flotante con Otros Ecosistemas"]
+        G["Mini-Navbar Contextual de Ruta"]
+    end
+    
+    subgraph "Ecosistema de Vectorización Rediseñado"
+        H["Paso 1: Bases de Datos Conectadas"] --> I["Paso 2: Explorador de Esquemas Full-Width"]
+        I --> J["Paso 3: Vectorización RAG 768-dim en 1 Clic"]
+    end
+```
+
+
+---
+
+## Fase 21: Arquitectura Monolítica Recta de UI/UX (Navbar y Sidebar como una Sola Pieza Sin Bordes Redondeados) (`v1.4.0`)
+
+### 1. Visión y Fundamentos del Diseño Minimalista Industrial
+- **Estructura Continua en "L" / "Marco Integrado"**: El Navbar Superior, el Mini-Navbar Contextual y el Sidebar Izquierdo se integran como una **sola pieza de interfaz continua**, sin separaciones flotantes, sin islas ni márgenes exteriores desconectados.
+- **Geometría Cuadrada / Recta (`rounded-none` / 0px border radius)**:
+  - Eliminar los radios redondeados (`rounded-2xl`, `rounded-3xl`, `rounded-xl`, `rounded-full`) de los contenedores estructurales principales (Navbar, Sub-Nav, Sidebar, paneles y tarjetas base).
+  - Adoptar un estilo visual **moderno, minimalista, limpio y técnico**, con bordes finos de 1px (`border-slate-200` o `border-datamind-light`), divisiones nítidas y fondos planos de alto contraste.
+- **Flujo Visual del Layout Integrado**:
+  - `Header`: Pegado al borde superior de la pantalla de extremo a extremo, altura fija nítida.
+  - `Sub-Nav`: Pegado inmediatamente debajo del Navbar sin margen.
+  - `Sidebar`: Pegado directamente al borde izquierdo de la pantalla y adosado bajo el Sub-Nav, con altura `calc(100vh - header_height)` y borde derecho divisor continuo (`border-r`).
+  - `Área de Trabajo`: Adosada directamente al Sidebar sin gap lateral desconectado, maximizando el área útil y creando una sensación de software de escritorio profesional (estilo VS Code, Linear o Bloomberg Terminal).
+
+```mermaid
+graph TD
+    subgraph "Pieza Continua Monolítica Recta (0px border-radius)"
+        NAV["Navbar Principal (Full-Width, Recto, border-b)"]
+        SUB["Mini-Navbar Contextual (Full-Width, Recto, border-b)"]
+        NAV --- SUB
+        
+        subgraph "Cuerpo de la Aplicación"
+            SIDE["Sidebar Integrado (Full-Height, Recto, border-r)"]
+            CONTENT["Lienzo de Trabajo / Chat / Vectorización / Ajustes (Recto, Full-Width)"]
+            SUB --- SIDE
+            SUB --- CONTENT
+            SIDE --- CONTENT
+        end
+    end
+```
+
+
+---
+
+## Fase 22: Plan de Refactorización y Componentes Blade Reutilizables (Código Limpio, Desacoplamiento JS y Modales Dinámicos) (`v1.5.0`)
+
+### 1. Diagnóstico de Deuda Técnica y Oportunidades de Reutilización
+1. **Modales Duplicados / Incrustados en Vistas**:
+   - El modal del **Centro de Entrenamiento IA** y futuros modales (ej: Conectar DB, Exportación, Confirmaciones) están embebidos directamente en `chat/index.blade.php` con más de 180 líneas de HTML/Blade inline.
+   - **Solución**: Crear un componente genérico y dinámico `<x-modal id="..." title="..." icon="..." size="...">` con slots para header, body y footer, totalmente recto y minimalista.
+2. **JavaScript Inline en Plantillas Blade**:
+   - En `settings/index.blade.php` hay ~70 líneas de script jQuery inline para sincronizar pickers, presets y fuentes.
+   - En `auth/login.blade.php` hay funciones inline `switchAuthTab` y `fillDemoCredentials`.
+   - **Solución**: Mover la lógica interactiva a módulos JavaScript limpios en `public/js/` (`settings_manager.js`, `auth_tabs.js`).
+3. **Layout Base Compartido (`<x-layouts.app>`)**:
+   - Actualmente `chat/index`, `connections/index` y `settings/index` repiten todo el esqueleto HTML (`<!DOCTYPE html>`, `<head>`, meta tags, hojas de estilo locales, scripts base de jQuery/SweetAlert/Toastr).
+   - **Solución**: Crear un componente de layout maestro `<x-app-layout title="..." ecosystem="...">` de modo que las vistas de cada ecosistema solo declaren su contenido específico en 30-50 líneas ultra legibles.
+4. **Componente Reutilizable de Tarjetas de Módulo / Sección (`<x-panel>` / `<x-card>`)**:
+   - Estandarizar las tarjetas y paneles de trabajo en `<x-panel title="..." icon="...">` con bordes rectos consistentes de 1px.
+
+```mermaid
+graph TD
+    A["Vistas Blade Desacopladas (chat, connections, settings)"] --> B["<x-app-layout> (Layout Maestro Monolítico)"]
+    B --> C["<x-ecosystem-header> (Navbar + Mini-Nav Recto)"]
+    B --> D["<x-ecosystem-sidebar> (Menús por BD)"]
+    
+    subgraph "Componentes Dinámicos Reutilizables"
+        E["<x-modal> (Modal Reutilizable con Slots)"]
+        F["<x-panel> (Contenedores Cuadrados 0px)"]
+        G["<x-data-table> (DataTables Reutilizable)"]
+    end
+    
+    subgraph "JavaScript Limpio y Modular (public/js/)"
+        H["theme_manager.js"]
+        I["settings_manager.js (Nuevo)"]
+        J["chat_stream.js"]
+        K["connections_manager.js"]
+        L["auth_helper.js (Nuevo)"]
+    end
+```

@@ -170,6 +170,7 @@ class DynamicDBAdapter(RelationalDbInterface):
         try:
             query = """
             SELECT 
+                c.table_schema,
                 c.table_name,
                 c.column_name,
                 c.data_type,
@@ -180,8 +181,8 @@ class DynamicDBAdapter(RelationalDbInterface):
               ON c.table_schema = st.schemaname AND c.table_name = st.relname
             LEFT JOIN pg_catalog.pg_description pgd
               ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
-            WHERE c.table_schema = 'public'
-            ORDER BY c.table_name, c.ordinal_position;
+            WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+            ORDER BY c.table_schema, c.table_name, c.ordinal_position;
             """
             records = await conn.fetch(query)
             rows = [dict(r) for r in records]
@@ -190,8 +191,10 @@ class DynamicDBAdapter(RelationalDbInterface):
             try:
                 fk_query = """
                 SELECT
+                    kcu.table_schema AS table_schema,
                     kcu.table_name AS table_name,
                     kcu.column_name AS column_name,
+                    ccu.table_schema AS referenced_table_schema,
                     ccu.table_name AS referenced_table_name,
                     ccu.column_name AS referenced_column_name
                 FROM information_schema.table_constraints AS tc
@@ -202,7 +205,7 @@ class DynamicDBAdapter(RelationalDbInterface):
                   ON ccu.constraint_name = tc.constraint_name
                  AND ccu.table_schema = tc.table_schema
                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND tc.table_schema = 'public';
+                  AND tc.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast');
                 """
                 fk_records = await conn.fetch(fk_query)
                 fk_rows = [dict(r) for r in fk_records]
@@ -267,8 +270,15 @@ class DynamicDBAdapter(RelationalDbInterface):
         fk_rows: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         tables: Dict[str, List[Dict[str, Any]]] = {}
+        table_schemas: Dict[str, str] = {}
         for r in rows:
-            t_name = r["table_name"]
+            schema_name = r.get("table_schema") or "public"
+            raw_table = r["table_name"]
+            # Para MySQL/MariaDB schema_name no aplica o es default; para Postgres usamos calificación si no es public
+            full_table = f"{schema_name}.{raw_table}" if schema_name not in ("public", "default") else raw_table
+            t_name = full_table
+            table_schemas[t_name] = schema_name
+
             if t_name not in tables:
                 tables[t_name] = []
             tables[t_name].append({
@@ -406,6 +416,7 @@ class DynamicDBAdapter(RelationalDbInterface):
                     related_set.append(rb["source_table"])
 
             result_tables.append({
+                "schema_name": table_schemas.get(t_name, "public"),
                 "table_name": t_name,
                 "primary_key": table_pk_col.get(t_name, "id"),
                 "descriptive_columns": table_descriptive_cols.get(t_name, []),

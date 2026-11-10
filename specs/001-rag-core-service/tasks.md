@@ -243,3 +243,63 @@
 - [ ] T106 **[Nivel 4 - Enseñar Fórmulas e Indicadores (`kpi_formula`)]**: Enseñar a la IA cómo se calculan las métricas clave de tu operación (ej. *"% de Eficiencia"*, *"Kilos Netos = `peso_bruto - peso_tara`"*, *"Días de Atraso"*), indicando exactamente qué columnas se suman, restan o dividen.
 - [ ] T107 **[Nivel 5 - Enseñar con el Ejemplo / Golden SQL (`sql_example`)]**: Crear o guardar desde el chat entre 3 y 5 **Consultas SQL de Oro (`SELECT ... JOIN`)** que crucen 2 o 3 tablas importantes de tu negocio. Probar pidiéndole a la IA: (a) una pregunta en texto, (b) *"hazme una tabla..."*, y (c) *"hazme un gráfico..."*.
 
+---
+
+## Fase 18: Arquitectura UI/UX de 3 Ecosistemas, Doble Navbar Contextual, Sidebars Escalables y Motor Dinámico de Colores/Tipografía/Tema (`v1.1.0`)
+
+- [x] T108 [P] Actualizar `resources/css/app.css` y `public/css/global_styles/globales.css` con `@theme inline` vinculado a variables CSS dinámicas (`--datamind-primary`, `--datamind-primary-dark`, `--datamind-secondary`, `--datamind-accent-light`, `--datamind-bg-neutral`, `--datamind-font-family`, `--datamind-font-size`), soporte de Modo Oscuro (`html.dark`) y crear `public/js/theme_manager.js` con aplicación instantánea sin parpadeo (Zero-FOUC), 5 paletas preset y selectores HEX personalizados
+- [x] T109 Crear el componente unificado de **Doble Navegación Superior** (`resources/views/components/ecosystem-header.blade.php`): (1) **Navbar Principal** con Conmutador de Ecosistemas (`💬 Chat`, `🗄️ Vectorización`, `⚙️ Configuración`), estado del motor IA y menú desplegable de **Mi Perfil / Cerrar Sesión / Cambiar Ecosistema**, y (2) **Mini-Navbar Contextual** justo debajo que muestra la ubicación amigable (*Ecosistema › Módulo Activo › Contexto*) e indicadores rápidos
+- [x] T110 Rediseñar el **Ecosistema de Chat (`/chat`)** (`resources/views/chat/index.blade.php` y `public/js/chat_stream.js`) integrando el Doble Navbar, el **Sidebar Escalable del Ecosistema Chat** (con navegación modular: *Consola de Chat*, *Centro de Entrenamiento IA*, *Consultas Sugeridas*, *Mis Conversaciones* y ranura de futuras expansiones) y sincronización de colores dinámicos en `Chart.js`
+- [x] T111 Rediseñar el **Ecosistema de Vectorización y Bases de Datos (`/connections`)** (`resources/views/connections/index.blade.php` y `public/js/connections_manager.js`) con su propio **Sidebar Escalable del Ecosistema Vectorización** (que permite alternar limpiamente entre *Resumen y Bases de Datos Guardadas*, *Nueva Conexión y Test*, *Explorador y Vectorización de Tablas*, *Mapa de Relaciones JOIN* y módulos futuros) actualizando en vivo el Mini-Navbar de posición
+- [x] T112 Construir el nuevo **Ecosistema de Configuración y Apariencia (`/settings`)** (`app/Http/Controllers/SettingsController.php`, `resources/views/settings/index.blade.php` y rutas en `routes/web.php`) con su **Sidebar Escalable del Ecosistema Configuración** (*Colores y Paleta*, *Tipografía y Tamaño de Texto*, *Tema Claro/Oscuro*, *Mi Perfil y Cuenta*), vista previa interactiva en vivo y guardado persistente
+- [x] T113 Ejecutar pruebas de integración en `php artisan test` (verificando `/chat`, `/connections` y `/settings`), recompilar assets con Vite (`npm run build`) e incrementar la versión a `1.1.0`
+- [x] T113b Reparar y normalizar la API de `window.DataMindTheme` en `public/js/theme_manager.js` y `resources/views/settings/index.blade.php`: implementar `getColors()`, `applyPreset()`, `applyCustomColors()`, `setFontSize()`, `setFontFamily()`, `resetDefaults()`, unificar la serialización en `localStorage` y habilitar el cambio reactivo en caliente al interactuar con paletas o color pickers en vivo
+
+---
+
+## Fase 19: Hub Central de Ecosistemas Post-Login y Sidebars Dinámicos por Base de Datos (`v1.2.0`)
+
+- [x] T114 Crear las migraciones y modelos Eloquent en Laravel: `create_ecosystems_table`, `create_ecosystem_modules_table` y `create_ecosystem_interfaces_table` con sus relaciones (`Ecosystem` hasMany `EcosystemModule` hasMany `EcosystemInterface`), campos de ordenación, badges, íconos y estado activo
+- [x] T115 Crear el seeder `EcosystemSeeder` que pre-puebla los 3 ecosistemas principales (`chat`, `vectorization`, `settings`), sus módulos (`chat_console`, `training_center`, `db_connections`, `table_explorer`, `appearance_settings`, etc.) y sus interfaces y acciones asociadas
+- [x] T116 Construir el **Hub Central de Ecosistemas (`resources/views/hub/index.blade.php`)** y el controlador `app/Http/Controllers/HubController.php` con el diseño exacto de la maqueta de referencia (tarjetas centradas de módulos, íconos temáticos, descripciones y botón `Ingresar →`) y ajustar `app/Http/Controllers/AuthController.php` y `routes/web.php` para que `/` y el post-login redirijan a `/hub`
+- [x] T117 Construir el componente Blade `<x-ecosystem-sidebar :ecosystem="$currentEcosystem" />` que renderiza dinámicamente los módulos e interfaces desde la BD, reemplazando el marcado estático en `chat/index.blade.php`, `connections/index.blade.php` y `settings/index.blade.php`
+- [x] T118 Conectar el Mini-Navbar Contextual (`<x-ecosystem-header>`) para que tome el ecosistema, módulo activo e interfaz seleccionada dinámicamente desde los registros de la base de datos
+- [x] T119 Ejecutar pruebas automatizadas en `php artisan test`, compilar Vite (`npm run build`) y verificar la navegación completa entre el Hub, Chat, Vectorización y Configuración
+
+
+---
+
+## Fase 20: Full-Screen Layout, Hub Post-Login Obligatorio, Switcher Flotante y UX Intuitiva de Vectorización (`v1.3.0`)
+
+- [x] T120 [P] Rediseñar la pantalla de autenticación (`resources/views/auth/login.blade.php`) eliminando el navbar superior para un diseño limpio y centrado, asegurando que el Chat (`/chat`) sea 100% operativo tanto con sesión iniciada como para usuarios anónimos
+- [x] T121 Ajustar el flujo de autenticación en `app/Http/Controllers/AuthController.php` (`login` y `register`) para forzar la redirección al Hub Central (`/hub`) tras el inicio de sesión exitoso sin saltarse la selección de ecosistemas
+- [x] T122 Actualizar los modelos y seeders de ecosistemas (`EcosystemSeeder.php`, `Ecosystem.php`, `EcosystemInterface.php`) asegurando que cada ecosistema resuelva su primera interfaz por defecto (`order_num = 1`) y que al hacer clic en el Hub se cargue esta interfaz activa
+- [x] T123 Rediseñar el componente `<x-ecosystem-header.blade.php>` implementando el **Switcher Flotante de Ecosistemas**: un botón único con ícono temático que al hacer hover despliega una burbuja flotante moderna con los otros ecosistemas disponibles (excluyendo el actual)
+- [x] T124 Convertir el layout general a **Full-Screen (100% de la pantalla)** en `chat/index.blade.php`, `connections/index.blade.php`, `settings/index.blade.php` y `hub/index.blade.php`, reemplazando los límites angostos `max-w-7xl` por contenedores fluidos `w-full`
+- [x] T125 Rediseñar la interfaz del **Ecosistema de Vectorización (`resources/views/connections/index.blade.php`)** para hacerla más intuitiva: panel de flujo guiado (Bases Conectadas, Conector Rápido, Explorador de Tablas con relaciones `JOIN` destacadas y barra de progreso de vectorización)
+- [x] T126 Validar con `npm run build`, ejecutar la suite completa en `php artisan test` e incrementar la versión a `1.3.0`
+
+
+---
+
+## Fase 21: UI/UX Monolítica Recta (Navbar y Sidebar Integrados como Sola Pieza Cuadrada) (`v1.4.0`)
+
+- [x] T127 [P] Rediseñar `<x-ecosystem-header.blade.php>` eliminando bordes redondeados (`rounded-none`), acoplando el Navbar y el Mini-Navbar de ubicación con bordes rectos de 1px continuos de extremo a extremo de la pantalla
+- [x] T128 Rediseñar `<x-ecosystem-sidebar.blade.php>` y los contenedores de los sidebars para convertirlos en una pieza vertical continua (`h-full`, `rounded-none`, `border-r border-slate-200`) adosada directamente al margen izquierdo sin gaps ni islas flotantes
+- [x] T129 Reestructurar el layout principal en `resources/views/chat/index.blade.php` para adosar el sidebar y el área de mensajes en un panel monolítico recto continuo (`rounded-none`, sin márgenes flotantes desconectados)
+- [x] T130 Reestructurar el layout del Ecosistema de Vectorización en `resources/views/connections/index.blade.php` con paneles cuadrados y limpios (sidebar lateral integrado + explorador de esquemas adosado)
+- [x] T131 Reestructurar el layout del Ecosistema de Configuración en `resources/views/settings/index.blade.php` con estética minimalista recta (sidebar continuo + paneles cuadrados de paleta y tipografía)
+- [x] T132 Recompilar assets de producción con Vite (`npm run build`), ejecutar suite de pruebas con `php artisan test` y verificar la estética recta profesional en toda la aplicación
+
+
+---
+
+## Fase 22: Componentes Reutilizables, Modularización JS y Vistas Limpias (`v1.5.0`)
+
+- [ ] T133 [P] Crear el Layout Maestro Blade `<x-app-layout title="..." ecosystem="..." ecosystemLabel="..." ecosystemIcon="...">` en `resources/views/layouts/app.blade.php`, encapsulando el `<head>`, theme manager, CSS locales, navbar y sub-nav rectos, y scripts obligatorios
+- [ ] T134 Crear el componente Blade `<x-modal id="..." title="..." icon="..." size="...">` en `resources/views/components/modal.blade.php` con backdrop limpio, estética recta minimalista, botones de cierre automáticos y slots dinámicos (`$header`, `$slot`, `$footer`)
+- [ ] T135 Crear el componente Blade `<x-panel title="..." icon="...">` en `resources/views/components/panel.blade.php` para estandarizar tarjetas de trabajo con bordes rectos de 1px y headers uniformes
+- [ ] T136 Extraer todo el código JavaScript inline de `resources/views/settings/index.blade.php` a un archivo externo limpio `public/js/settings_manager.js` y el script de `auth/login.blade.php` a `public/js/auth_helper.js`
+- [ ] T137 Extraer el modal del Centro de Entrenamiento de `resources/views/chat/index.blade.php` a una vista parcial dedicada `resources/views/chat/partials/training-center-modal.blade.php` usando el nuevo componente `<x-modal>`
+- [ ] T138 Refactorizar las vistas principales (`chat/index.blade.php`, `connections/index.blade.php`, `settings/index.blade.php`) para heredar de `<x-app-layout>`, reduciendo su longitud y dejándolas concisas, legibles y fáciles de mantener
+- [ ] T139 Recompilar con Vite (`npm run build`), verificar la suite completa de pruebas con `php artisan test` e incrementar la versión a `1.5.0`

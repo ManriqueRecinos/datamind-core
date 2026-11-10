@@ -167,6 +167,31 @@ As a product owner, database administrator, or business analyst, I want to teach
 
 ---
 
+### User Story 9 - Multi-Ecosystem Modular Workspace, Context Sub-Navbar, Expandable Sidebars & Dynamic Theme/Color/Typography Engine (Priority: P1)
+
+As a DataMind Studio user, I want the application structured around **3 independent yet connected Ecosystems** (**1. Ecosistema de Chat & Analítica**, **2. Ecosistema de Vectorización & Bases de Datos**, and **3. Ecosistema de Configuración & Apariencia**) with a unified **Top Navbar** (Ecosystem Switcher + User Profile/Session Menu), a **Context Mini-Navbar** right below it showing my human-readable current position (*Ecosistema › Módulo › Sección Activa*), an **extensible Sidebar per Ecosystem**, and a **Dynamic Theme & Color Engine** where I can customize application colors, font family, text size, and light/dark mode in real time.
+
+**Acceptance Scenarios**:
+1. **Unified Top Navbar & Human-Readable Context Mini-Navbar ("Sub-Nav de Ubicación")**:
+   - **Given** any view in `datamind-studio`.
+   - **When** the page renders.
+   - **Then** the top header displays:
+     - **Main Navbar**: Brand identity, the **Selector Rápido de Ecosistemas** (`💬 Ecosistema Chat`, `🗄️ Ecosistema Vectorización`, `⚙️ Ecosistema Configuración`), Motor IA status indicator, and the **Menú de Perfil de Usuario** (`Ver mi Perfil`, `Preferencias Rápidas`, `Cerrar Sesión`).
+     - **Mini-Navbar Contextual (debajo del Navbar)**: A sleek sub-bar showing a friendly, non-technical location path (e.g., `🗄️ Ecosistema de Vectorización  ›  Explorador y Vectorización de Tablas  ›  Conexión: ERP Corporativo`) plus contextual quick actions/badges for that screen.
+2. **Dedicated Expandable Sidebar in Each Ecosystem**:
+   - **Given** the user navigating inside any of the 3 Ecosystems.
+   - **When** the ecosystem layout loads.
+   - **Then** each ecosystem displays its own modular left **Sidebar** prepared for future expansion:
+     - **Sidebar del Ecosistema Chat (`/chat`)**: Navegación de módulos (`💬 Consola de Chat`, `🎓 Centro de Entrenamiento IA`, `📊 Galería de Gráficos / Consultas`, `🕘 Mis Conversaciones` + bloques futuros).
+     - **Sidebar del Ecosistema Vectorización (`/connections`)**: Navegación por secciones (`➕ Nueva Conexión y Test`, `🗄️ Bases de Datos Guardadas`, `🧠 Explorador y Vectorización de Tablas`, `🔗 Mapa de Relaciones JOIN`, `🎓 Reglas de Esquema` + módulos futuros).
+     - **Sidebar del Ecosistema Configuración (`/settings`)**: Navegación por categorías (`🎨 Colores y Paleta`, `🔤 Tipografía y Tamaño de Texto`, `🌓 Tema y Superficies`, `👤 Mi Perfil y Cuenta` + opciones futuras).
+3. **Real-Time Dynamic Color, Font, Text Size & Theme Configuration**:
+   - **Given** a user in the **Ecosistema de Configuración (`/settings`)** (or quick appearance drawer).
+   - **When** the user selects a preset palette (e.g., *DataMind Ocean Blue*, *Emerald Analytics*, *Royal Indigo*, *Sunset Amber*, *Slate Monochrome*) or picks custom Hex colors (`--datamind-primary`, `--datamind-primary-dark`, `--datamind-secondary`, `--datamind-accent-light`, `--datamind-bg-neutral`), changes the **Tamaño de Texto** (`Compacto 13px`, `Normal 14px`, `Cómodo 15px`, `Grande 16px`), changes the **Fuente Tipográfica** (`Inter / Instrument Sans`, `System UI`, `JetBrains / Monospace`), or toggles **Modo Claro / Oscuro**.
+   - **Then** CSS custom properties on `:root` update instantaneously across all views (buttons, chat bubbles, badges, borders, scrollbars, charts, and tables) and persist in both `localStorage` (zero-FOUC instant boot) and the authenticated user's profile preferences.
+
+---
+
 ## Technical Constraints & Boundaries
 
 1. **Local AI Execution**: Ollama running locally on Windows (using CPU AVX2 acceleration on Intel Core i5-14500T, Qwen 2.5 7B / Llama 3.1 8B, memory footprint <= 6GB).
@@ -175,3 +200,27 @@ As a product owner, database administrator, or business analyst, I want to teach
    - **External Storage**: MariaDB for read-only enterprise process data.
 3. **Clean Architecture Isolation**: Application use cases must remain fully decoupled from FastAPI routes and specific database drivers.
 4. **Pydantic V2 Multi-Model**: Strict validation for all requests and responses.
+
+
+---
+
+### User Story 10 - Central Ecosystem Hub Post-Login & Database-Driven Dynamic Menus/Interfaces (Priority: P1)
+
+As an enterprise user logging into DataMind Studio, I want to land on a clean, centralized **Ecosystem Hub ("Inicio / Hub")** presenting clear operational module cards (idéntico a la vista de referencia de Inicio), so that when I select an ecosystem (Chat, Vectorización, Configuración, etc.), the application loads its dedicated left sidebar, sub-navigation and interfaces **dynamically populated from relational database tables** (`ecosystems`, `ecosystem_modules`, `ecosystem_interfaces`), allowing new operational modules and menus to be registered or customized at runtime without modifying frontend templates.
+
+**Acceptance Scenarios**:
+1. **Central Ecosystem Hub (`/hub`) Post-Login**:
+   - **Given** a user successfully authenticating in `POST /login` or navigating to `/hub`.
+   - **When** the page renders.
+   - **Then** the user sees a centered, minimalist Hub layout with:
+     - Header: "Inicio - Selecciona un módulo operativo para continuar".
+     - Responsive grid of cards representing each active Ecosystem (`chat`, `vectorization`, `settings`, etc.), each with its badge/module number (`Módulo 1`, `Módulo 2`...), themed soft icon, title, short description, and action button `Ingresar →`.
+2. **Database-Driven Dynamic Sidebar & Navigation**:
+   - **Given** an ecosystem chosen by the user.
+   - **When** the ecosystem view loads (`/chat`, `/connections`, `/settings`).
+   - **Then** the layout queries `ecosystem_modules` and `ecosystem_interfaces` associated with that ecosystem from the database and renders the sidebar dynamically.
+   - Adding a new module or interface in the database automatically surfaces in the respective sidebar with its icon, route/action target, and ordering without touching Blade code.
+3. **Context Sub-Nav Synchronization**:
+   - **Given** the user browsing within an ecosystem and clicking a module or interface.
+   - **When** the interface updates.
+   - **Then** the Context Mini-Navbar reflects the breadcrumb trail (`Ecosistema › Módulo › Interfaz`) directly from the database attributes.
