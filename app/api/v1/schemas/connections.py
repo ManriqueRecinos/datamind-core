@@ -18,6 +18,7 @@ class ConnectionCreateRequest(ConnectionTestRequest):
     """Solicitud para guardar una nueva conexión de base de datos."""
     name: str = Field(..., min_length=2, max_length=120, description="Nombre descriptivo o alias de la conexión")
     set_active: bool = Field(default=True, description="Establecer como conexión activa por defecto")
+    selected_schemas: Optional[List[str]] = Field(default=None, description="Esquemas seleccionados por el usuario")
 
 
 class ConnectionInfoResponse(BaseModel):
@@ -33,6 +34,7 @@ class ConnectionInfoResponse(BaseModel):
     is_active: bool
     synced_tables: List[str] = []
     synced_tables_count: int = 0
+    selected_schemas: Optional[List[str]] = None
     created_at: Optional[str] = None
     tables_detected: Optional[int] = None
     latency_ms: Optional[int] = None

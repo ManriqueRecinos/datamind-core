@@ -39,10 +39,21 @@ class DynamicDBAdapter(RelationalDbInterface):
         return "postgres" if self.is_postgres else "mysql"
 
     async def test_connection(self) -> Dict[str, Any]:
-        """Verifica la conexión, obtiene versión del motor y cantidad total de tablas accesibles."""
+        """Verifica la conexión, obtiene versión del motor, cantidad total de tablas accesibles y esquemas detectados."""
         start = time.time()
         tables = await self.introspect_schema()
         latency_ms = int((time.time() - start) * 1000)
+
+        schemas_map: Dict[str, int] = {}
+        for t in tables:
+            s_name = t.get("schema_name") or ("public" if self.is_postgres else (self.db or "default"))
+            schemas_map[s_name] = schemas_map.get(s_name, 0) + 1
+
+        schemas_detected = [
+            {"name": s, "tables_count": count}
+            for s, count in sorted(schemas_map.items(), key=lambda x: x[0].lower())
+        ]
+
         return {
             "connected": True,
             "engine": "postgresql" if self.is_postgres else "mariadb",
@@ -50,6 +61,7 @@ class DynamicDBAdapter(RelationalDbInterface):
             "port": self.port,
             "database_name": self.db,
             "tables_detected": len(tables),
+            "schemas_detected": schemas_detected,
             "latency_ms": latency_ms
         }
 
@@ -212,7 +224,24 @@ class DynamicDBAdapter(RelationalDbInterface):
             except Exception:
                 fk_rows = []
 
-            return self._group_columns_by_table(rows, fk_rows)
+            # Extraer índices definidos en PostgreSQL
+            index_rows: List[Dict[str, Any]] = []
+            try:
+                idx_query = """
+                SELECT
+                    schemaname AS table_schema,
+                    tablename AS table_name,
+                    indexname AS index_name,
+                    indexdef AS index_def
+                FROM pg_catalog.pg_indexes
+                WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast');
+                """
+                idx_records = await conn.fetch(idx_query)
+                index_rows = [dict(r) for r in idx_records]
+            except Exception:
+                index_rows = []
+
+            return self._group_columns_by_table(rows, fk_rows, index_rows)
         finally:
             await conn.close()
 
@@ -267,7 +296,8 @@ class DynamicDBAdapter(RelationalDbInterface):
     def _group_columns_by_table(
         cls,
         rows: List[Dict[str, Any]],
-        fk_rows: Optional[List[Dict[str, Any]]] = None
+        fk_rows: Optional[List[Dict[str, Any]]] = None,
+        index_rows: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         tables: Dict[str, List[Dict[str, Any]]] = {}
         table_schemas: Dict[str, str] = {}
@@ -403,6 +433,23 @@ class DynamicDBAdapter(RelationalDbInterface):
                         "source_descriptive_columns": table_descriptive_cols.get(src_t, [])
                     })
 
+        # Mapa de índices agrupados por tabla
+        table_indexes: Dict[str, List[Dict[str, Any]]] = {k: [] for k in tables.keys()}
+        for idx in (index_rows or []):
+            s_name = idx.get("table_schema") or "public"
+            raw_t = idx.get("table_name")
+            full_t = f"{s_name}.{raw_t}" if s_name not in ("public", "default") else raw_t
+            matched_key = None
+            if full_t in table_indexes:
+                matched_key = full_t
+            elif raw_t in table_indexes:
+                matched_key = raw_t
+            if matched_key:
+                table_indexes[matched_key].append({
+                    "name": idx.get("index_name") or "",
+                    "definition": idx.get("index_def") or ""
+                })
+
         result_tables: List[Dict[str, Any]] = []
         for t_name, cols in tables.items():
             fks = outgoing_fks.get(t_name, [])
@@ -424,7 +471,8 @@ class DynamicDBAdapter(RelationalDbInterface):
                 "columns": cols,
                 "foreign_keys": fks,
                 "referenced_by": refs_by,
-                "related_tables": related_set
+                "related_tables": related_set,
+                "indexes": table_indexes.get(t_name, [])
             })
 
         return result_tables

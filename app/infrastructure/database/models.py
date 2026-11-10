@@ -111,6 +111,7 @@ class DatabaseConnectionModel(Base):
     password = Column(Text, nullable=False, default="")
     is_active = Column(Boolean, nullable=False, default=False, index=True)
     synced_tables = Column(JSONB, nullable=False, default=list)
+    selected_schemas = Column(JSONB, nullable=True, default=list)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),

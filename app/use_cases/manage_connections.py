@@ -110,7 +110,8 @@ class ManageConnectionsUseCase:
         database_name: str,
         username: str,
         password: str = "",
-        set_active: bool = True
+        set_active: bool = True,
+        selected_schemas: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Verifica y guarda una nueva conexión a base de datos."""
         norm_engine = "postgresql" if engine.lower() in ("postgresql", "postgres", "pgsql") else "mariadb"
@@ -139,7 +140,8 @@ class ManageConnectionsUseCase:
             username=username.strip(),
             password=password or "",
             is_active=set_active,
-            synced_tables=[]
+            synced_tables=[],
+            selected_schemas=selected_schemas or []
         )
         self.session.add(conn_model)
         await self.session.commit()
@@ -148,6 +150,7 @@ class ManageConnectionsUseCase:
         serialized = self._serialize_connection(conn_model)
         serialized["tables_detected"] = test_info["tables_detected"]
         serialized["latency_ms"] = test_info["latency_ms"]
+        serialized["schemas_detected"] = test_info.get("schemas_detected", [])
         return serialized
 
     async def activate_connection(self, connection_id: str) -> Dict[str, Any]:
@@ -202,16 +205,21 @@ class ManageConnectionsUseCase:
         adapter = self._build_adapter(conn_model)
         all_tables = await adapter.introspect_schema()
         synced_set = {t.lower() for t in (conn_model.synced_tables or [])}
+        allowed_schemas = set(s.lower() for s in (conn_model.selected_schemas or [])) if conn_model.selected_schemas else None
 
         enriched_tables = []
         for t in all_tables:
+            s_name = t.get("schema_name") or "public"
+            if allowed_schemas is not None and s_name.lower() not in allowed_schemas:
+                continue
+
             t_name = t["table_name"]
             fks = t.get("foreign_keys", [])
             refs_by = t.get("referenced_by", [])
             related_tables = t.get("related_tables", [])
 
             enriched_tables.append({
-                "schema_name": t.get("schema_name") or "public",
+                "schema_name": s_name,
                 "table_name": t_name,
                 "primary_key": t.get("primary_key", "id"),
                 "descriptive_columns": t.get("descriptive_columns", []),
@@ -220,6 +228,7 @@ class ManageConnectionsUseCase:
                 "foreign_keys": fks,
                 "referenced_by": refs_by,
                 "related_tables": related_tables,
+                "indexes": t.get("indexes", []),
                 "column_names_preview": ", ".join([c["name"] for c in t["columns"][:8]])
                 + (f" (+{len(t['columns']) - 8} más)" if len(t["columns"]) > 8 else ""),
                 "is_vectorized": t_name.lower() in synced_set
@@ -426,6 +435,7 @@ class ManageConnectionsUseCase:
     @staticmethod
     def _serialize_connection(conn: DatabaseConnectionModel) -> Dict[str, Any]:
         synced = list(conn.synced_tables or [])
+        selected_schemas = list(conn.selected_schemas or []) if conn.selected_schemas else None
         return {
             "id": str(conn.id),
             "name": conn.name,
@@ -438,5 +448,6 @@ class ManageConnectionsUseCase:
             "is_active": bool(conn.is_active),
             "synced_tables": synced,
             "synced_tables_count": len(synced),
+            "selected_schemas": selected_schemas,
             "created_at": conn.created_at.isoformat() if conn.created_at else None
         }

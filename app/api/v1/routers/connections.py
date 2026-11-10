@@ -71,7 +71,8 @@ async def create_connection(
             database_name=payload.database_name,
             username=payload.username,
             password=payload.password or "",
-            set_active=payload.set_active
+            set_active=payload.set_active,
+            selected_schemas=payload.selected_schemas
         )
         return ConnectionInfoResponse(**created)
     except Exception as e:
