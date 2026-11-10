@@ -9,6 +9,8 @@ class ChatRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="Pregunta del usuario en lenguaje natural")
     session_id: Optional[str] = Field(default=None, description="UUID de sesión existente o None para nueva")
     user_id: Optional[str] = Field(default="laravel_user", description="Identificador del usuario en Laravel")
+    user_role: Optional[str] = Field(default="user", description="Rol maestro del usuario (ej: super-admin, data-analyst)")
+    user_permissions: Optional[List[str]] = Field(default_factory=list, description="Lista de slugs de permisos autorizados")
     connection_id: Optional[str] = Field(default=None, description="UUID de la conexión de BD seleccionada")
 
 

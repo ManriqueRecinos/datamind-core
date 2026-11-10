@@ -33,7 +33,9 @@ async def send_chat_message(
             prompt=payload.prompt,
             session_id=payload.session_id,
             user_id=payload.user_id or "user",
-            connection_id=payload.connection_id
+            connection_id=payload.connection_id,
+            user_role=payload.user_role or "user",
+            user_permissions=payload.user_permissions or []
         )
         return ChatResponse(**result)
     except Exception as e:

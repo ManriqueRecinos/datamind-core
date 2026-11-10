@@ -223,11 +223,51 @@ class AskChatUseCase:
         prompt: str,
         session_id: Optional[str] = None,
         user_id: str = "user",
-        connection_id: Optional[str] = None
+        connection_id: Optional[str] = None,
+        user_role: str = "user",
+        user_permissions: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Ejecuta la respuesta completa síncrona."""
+        """Ejecuta la respuesta completa síncrona evaluando políticas y roles RBAC."""
         start_time = time.time()
         s_id = await self._get_or_create_session(session_id, user_id, prompt)
+        perms = user_permissions or []
+
+        # GUARDRAIL RBAC IA: Comprobar acciones restringidas según el rol y permisos
+        is_super_admin = (user_role == "super-admin")
+        lower_prompt = prompt.lower()
+
+        # 1. Intento de entrenamiento / enseñanza sin permiso 'chat.train'
+        if ("enséñale" in lower_prompt or "aprende" in lower_prompt or "regla" in lower_prompt) and not is_super_admin:
+            if "chat.train" not in perms and perms:
+                return {
+                    "session_id": str(s_id),
+                    "message": f"Acción restringida: Tu rol actual ('{user_role}') no tiene autorización para registrar reglas de conocimiento o entrenar el modelo RAG.",
+                    "intent": "general_chat",
+                    "has_tabular_data": False,
+                    "dataset_id": None,
+                    "row_count": 0,
+                    "generated_sql": None,
+                    "columns": [],
+                    "preview_rows": [],
+                    "chart_config": None,
+                    "latency_ms": int((time.time() - start_time) * 1000)
+                }
+
+        # 2. Intento de consulta directa a bases de datos sin permiso 'chat.use'
+        if not is_super_admin and perms and "chat.use" not in perms:
+            return {
+                "session_id": str(s_id),
+                "message": f"Acceso restringido: Tu perfil ('{user_role}') no cuenta con privilegios para consultar el motor analítico.",
+                "intent": "general_chat",
+                "has_tabular_data": False,
+                "dataset_id": None,
+                "row_count": 0,
+                "generated_sql": None,
+                "columns": [],
+                "preview_rows": [],
+                "chart_config": None,
+                "latency_ms": int((time.time() - start_time) * 1000)
+            }
 
         # 1. Clasificar intención y detectar explícitamente qué formato solicitó el usuario
         intent = IntentClassifier.classify(prompt)
@@ -501,6 +541,7 @@ class AskChatUseCase:
                     f"ESQUEMAS DE TABLAS Y RELACIONES VECTORIZADOS DISPONIBLES EN `{db_name}`:\n{schema_context}{joins_summary}{rules_summary}\n\n"
                     f"REGLAS OBLIGATORIAS DE ANÁLISIS RELACIONAL Y GRÁFICOS:\n"
                     f"- Usa únicamente las tablas y columnas listadas en los esquemas.\n"
+                    f"- SOPORTE MULTI-ESQUEMA: Si la tabla contiene prefijo de esquema (ej: `produccion.ordenes`, `inventario.items`, `hop.registro`), SIEMPRE califica el nombre completo en `FROM` y `JOIN` con su esquema exacto (ej. `FROM produccion.ordenes`). Para tablas del esquema `public`, puedes usar `public.tabla` o `tabla`.\n"
                     f"- APLICA ESTRICTAMENTE las REGLAS DE NEGOCIO, DICCIONARIO Y EJEMPLOS SQL ENSEÑADOS POR EL USUARIO si aparecen arriba.\n"
                     f"- REGLA DE ORO DE RELACIONES (`JOIN`): Cuando una tabla tenga columnas de relación como `id_empresa`, `empresa_id`, `current_company_id`, `id_cliente`, `id_rollo`, `id_orden`, etc., ese ID por sí solo NO dice el nombre real. SIEMPRE realiza el `INNER JOIN` o `LEFT JOIN` hacia la tabla relacionada (por ejemplo `JOIN empresa ON usuario.id_empresa = empresa.id` o `JOIN companies ON users.current_company_id = companies.id`) e incluye en el `SELECT` las columnas descriptivas reales de la tabla maestra con un alias claro (ej. `companies.name AS empresa_nombre`).\n"
                     f"- Si el usuario menciona dos o más tablas o entidades vinculadas/relacionadas, realiza el `JOIN` correspondiente e incluye en el `SELECT` las columnas descriptivas (nombres, estados, tipos, fechas) y numéricas (cantidades, pesos, totales) de ambas tablas para poder analizarlas y graficarlas con datos exactos.\n"
