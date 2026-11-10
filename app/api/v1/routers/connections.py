@@ -7,6 +7,7 @@ from app.api.v1.schemas.connections import (
     ConnectionCreateRequest,
     ConnectionInfoResponse,
     ConnectionTestRequest,
+    ConnectionUpdateRequest,
     VectorizeTablesRequest,
 )
 from app.infrastructure.database.postgres_adapter import get_db_session
@@ -80,6 +81,37 @@ async def create_connection(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error al crear y verificar la conexión: {str(e)}"
         )
+
+
+@router.put(
+    "/{connection_id}",
+    response_model=ConnectionInfoResponse,
+    summary="Actualizar la configuración o esquemas seleccionados de una conexión"
+)
+async def update_connection(
+    connection_id: str,
+    payload: ConnectionUpdateRequest,
+    session: AsyncSession = Depends(get_db_session)
+):
+    try:
+        use_case = ManageConnectionsUseCase(session)
+        updated = await use_case.update_connection(
+            connection_id=connection_id,
+            name=payload.name,
+            engine=payload.engine,
+            host=payload.host,
+            port=payload.port,
+            database_name=payload.database_name,
+            username=payload.username,
+            password=payload.password,
+            selected_schemas=payload.selected_schemas,
+            set_active=payload.set_active
+        )
+        return ConnectionInfoResponse(**updated)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.post(

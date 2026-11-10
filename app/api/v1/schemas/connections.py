@@ -21,6 +21,19 @@ class ConnectionCreateRequest(ConnectionTestRequest):
     selected_schemas: Optional[List[str]] = Field(default=None, description="Esquemas seleccionados por el usuario")
 
 
+class ConnectionUpdateRequest(BaseModel):
+    """Solicitud para actualizar una conexión existente."""
+    name: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    engine: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    database_name: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    selected_schemas: Optional[List[str]] = None
+    set_active: Optional[bool] = None
+
+
 class ConnectionInfoResponse(BaseModel):
     """Información pública de una conexión registrada (con contraseña enmascarada)."""
     id: str

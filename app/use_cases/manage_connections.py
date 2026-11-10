@@ -153,6 +153,52 @@ class ManageConnectionsUseCase:
         serialized["schemas_detected"] = test_info.get("schemas_detected", [])
         return serialized
 
+    async def update_connection(
+        self,
+        connection_id: str,
+        name: Optional[str] = None,
+        engine: Optional[str] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        database_name: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        selected_schemas: Optional[List[str]] = None,
+        set_active: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """Actualiza la configuración, credenciales o esquemas seleccionados de una conexión."""
+        conn_uuid = uuid.UUID(str(connection_id))
+        target = await self.session.get(DatabaseConnectionModel, conn_uuid)
+        if not target:
+            raise ValueError(f"No se encontró la conexión con ID {connection_id}")
+
+        if name is not None:
+            target.name = name.strip()
+        if engine is not None:
+            target.engine = "postgresql" if engine.lower() in ("postgresql", "postgres", "pgsql") else "mariadb"
+        if host is not None:
+            target.host = host.strip()
+        if port is not None:
+            target.port = int(port)
+        if database_name is not None:
+            target.database_name = database_name.strip()
+        if username is not None:
+            target.username = username.strip()
+        if password is not None and password != "":
+            target.password = password
+        if selected_schemas is not None:
+            target.selected_schemas = selected_schemas
+
+        if set_active is True:
+            await self.session.execute(
+                update(DatabaseConnectionModel).values(is_active=False)
+            )
+            target.is_active = True
+
+        await self.session.commit()
+        await self.session.refresh(target)
+        return self._serialize_connection(target)
+
     async def activate_connection(self, connection_id: str) -> Dict[str, Any]:
         """Marca una conexión como la activa por defecto para el asistente de chat."""
         conn_uuid = uuid.UUID(str(connection_id))
