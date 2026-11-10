@@ -23,7 +23,45 @@ class ChatResponse(BaseModel):
     generated_sql: Optional[str] = None
     columns: Optional[List[str]] = None
     preview_rows: Optional[List[Dict[str, Any]]] = None
+    chart_config: Optional[Dict[str, Any]] = None
     latency_ms: int = 0
+
+
+class ChatSessionSummarySchema(BaseModel):
+    """Resumen de una sesión de chat para el panel de historial del usuario."""
+    id: str
+    user_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+
+
+class ChatMessageHistoryItemSchema(BaseModel):
+    """Mensaje individual dentro del historial de una conversación."""
+    id: str
+    role: str
+    content: str
+    intent: Optional[str] = None
+    generated_sql: Optional[str] = None
+    dataset_id: Optional[str] = None
+    has_tabular_data: bool = False
+    row_count: Optional[int] = None
+    columns: Optional[List[str]] = None
+    preview_rows: Optional[List[Dict[str, Any]]] = None
+    chart_config: Optional[Dict[str, Any]] = None
+    latency_ms: Optional[int] = None
+    created_at: str
+
+
+class ChatSessionDetailSchema(BaseModel):
+    """Detalle completo de una sesión con su lista de mensajes."""
+    id: str
+    user_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    messages: List[ChatMessageHistoryItemSchema] = Field(default_factory=list)
 
 
 class StreamTokenEvent(BaseModel):

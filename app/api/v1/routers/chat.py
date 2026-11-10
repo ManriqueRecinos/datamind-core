@@ -1,9 +1,15 @@
 """Endpoints para la conversación de chat y streaming en tiempo real (SSE)."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.v1.schemas.chat import ChatRequest, ChatResponse
+from app.api.v1.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    ChatSessionDetailSchema,
+    ChatSessionSummarySchema,
+)
 from app.api.v1.streaming import format_sse
 from app.infrastructure.database.postgres_adapter import get_db_session
 from app.use_cases.ask_chat import AskChatUseCase
@@ -65,14 +71,15 @@ async def stream_chat_message(
                 separator = " " if idx < len(tokens) - 1 else ""
                 yield format_sse("token", {"text": token + separator})
 
-            # Si produjo datos tabulares, emitir el evento dataset para habilitar el botón de Excel
+            # Si produjo datos tabulares, emitir el evento dataset para habilitar el botón de Excel y Constructor de Gráficos
             if result.get("has_tabular_data") and result.get("dataset_id"):
                 yield format_sse("dataset", {
                     "dataset_id": result["dataset_id"],
                     "row_count": result.get("row_count", 0),
                     "columns": result.get("columns", []),
                     "preview_rows": result.get("preview_rows", []),
-                    "sql": result.get("generated_sql")
+                    "sql": result.get("generated_sql"),
+                    "chart_config": result.get("chart_config")
                 })
 
             # Emitir evento de finalización
@@ -92,3 +99,58 @@ async def stream_chat_message(
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.get(
+    "/sessions",
+    response_model=List[ChatSessionSummarySchema],
+    summary="Listar historial de sesiones de conversación de un usuario"
+)
+async def list_chat_sessions(
+    user_id: str = Query(default="user", description="Identificador del usuario autenticado"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Retorna la lista de sesiones conversacionales del usuario ordenadas por actividad reciente."""
+    use_case = AskChatUseCase(session)
+    return await use_case.list_user_sessions(user_id=user_id)
+
+
+@router.get(
+    "/sessions/{session_id}",
+    response_model=ChatSessionDetailSchema,
+    summary="Obtener todos los mensajes e historial de una sesión"
+)
+async def get_chat_session_detail(
+    session_id: str,
+    user_id: Optional[str] = Query(default=None, description="Identificador del usuario propietario"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Recupera la sesión y su secuencia cronológica de mensajes con metadatos de datasets y gráficos."""
+    use_case = AskChatUseCase(session)
+    detail = await use_case.get_session_detail(session_id=session_id, user_id=user_id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No se encontró la sesión solicitada."
+        )
+    return detail
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    summary="Eliminar una sesión del historial de conversaciones"
+)
+async def delete_chat_session(
+    session_id: str,
+    user_id: Optional[str] = Query(default=None, description="Identificador del usuario propietario"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Elimina la sesión conversacional y sus mensajes asociados."""
+    use_case = AskChatUseCase(session)
+    deleted = await use_case.delete_session(session_id=session_id, user_id=user_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No se encontró la sesión a eliminar."
+        )
+    return {"deleted": True, "session_id": session_id}
