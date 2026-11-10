@@ -1,6 +1,7 @@
 """Repositorio para almacenamiento y búsqueda por similitud en PostgreSQL con pgvector."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
+import re
 import uuid
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.infrastructure.database.models import (
     KnowledgeDocumentModel,
     KnowledgeVectorChunkModel,
 )
+from app.use_cases.intent_classifier import remove_accents
 
 
 class VectorRepository:
@@ -103,6 +105,115 @@ class VectorRepository:
 
         return results
 
+    async def search_schema_with_relations(
+        self,
+        query_embedding: List[float],
+        prompt_text: str,
+        top_k: int = 6,
+        connection_id: Optional[str] = None
+    ) -> List[DocumentChunk]:
+        """
+        Búsqueda Híbrida + Expansión Automática de Vecinos (1-Hop Relational Graph Expansion)
+        siguiendo las skills `rag-engineer` y `hybrid-search-implementation`:
+        1. Recupera los esquemas más similares por vector (pgvector HNSW).
+        2. Combina coincidencia léxica de nombres de tablas/entidades mencionados en el prompt.
+        3. Lee `metadata["related_tables"]` de las tablas recuperadas y trae automáticamente los
+           esquemas de las tablas relacionadas (ej. si entra `usuario`, trae también `empresa` para el JOIN).
+        """
+        primary_chunks = await self.search_similar(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            category="db_schema",
+            connection_id=connection_id
+        )
+        if not primary_chunks and connection_id:
+            primary_chunks = await self.search_similar(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                category="db_schema"
+            )
+
+        collected_by_id: Dict[str, DocumentChunk] = {}
+        seen_tables: Set[str] = set()
+        neighbor_tables_to_fetch: Set[str] = set()
+
+        for ch in primary_chunks:
+            collected_by_id[ch.id] = ch
+            t_name = str((ch.metadata or {}).get("table_name", "")).strip()
+            if t_name:
+                seen_tables.add(t_name.lower())
+            for rel_t in (ch.metadata or {}).get("related_tables", []) or []:
+                if rel_t and str(rel_t).strip().lower() not in seen_tables:
+                    neighbor_tables_to_fetch.add(str(rel_t).strip())
+
+        # Paso 2 (Hybrid Search): Buscar todos los documentos de esquema de la conexión para:
+        # a) Coincidencia léxica directa con palabras del prompt (ej. "usuario", "empresa", "rollo")
+        # b) Expansión 1-Hop de las tablas vecinas (`related_tables`)
+        stmt = (
+            select(KnowledgeVectorChunkModel, KnowledgeDocumentModel)
+            .join(KnowledgeDocumentModel, KnowledgeVectorChunkModel.document_id == KnowledgeDocumentModel.id)
+            .where(KnowledgeDocumentModel.category == "db_schema")
+        )
+        if connection_id:
+            stmt = stmt.where(
+                KnowledgeDocumentModel.metadata_["connection_id"].astext == str(connection_id)
+            )
+
+        all_schema_rows = (await self.session.execute(stmt)).all()
+        norm_prompt = remove_accents((prompt_text or "").lower())
+
+        # Primera pasada: coincidencias léxicas directas en el prompt
+        for chunk_model, doc_model in all_schema_rows:
+            c_id = str(chunk_model.id)
+            if c_id in collected_by_id:
+                continue
+            meta = chunk_model.metadata_ or doc_model.metadata_ or {}
+            t_name = str(meta.get("table_name", "")).strip()
+            if not t_name:
+                continue
+            t_norm = remove_accents(t_name.lower())
+            t_singular = t_norm[:-1] if t_norm.endswith("s") and len(t_norm) > 3 else t_norm
+            t_clean = re.sub(r"^(tbl_|tb_|cat_|mae_|dim_)", "", t_singular)
+
+            if (
+                (len(t_norm) >= 3 and re.search(rf"\b{re.escape(t_norm)}\b", norm_prompt))
+                or (len(t_clean) >= 3 and re.search(rf"\b{re.escape(t_clean)}\b", norm_prompt))
+            ):
+                collected_by_id[c_id] = DocumentChunk(
+                    id=c_id,
+                    document_id=str(chunk_model.document_id),
+                    chunk_index=chunk_model.chunk_index,
+                    chunk_text=chunk_model.chunk_text,
+                    metadata=meta,
+                    similarity_score=0.95
+                )
+                seen_tables.add(t_name.lower())
+                for rel_t in meta.get("related_tables", []) or []:
+                    if rel_t and str(rel_t).strip().lower() not in seen_tables:
+                        neighbor_tables_to_fetch.add(str(rel_t).strip())
+
+        # Segunda pasada (1-Hop Relational Graph Expansion): traer tablas relacionadas por FK
+        neighbor_lower = {n.lower() for n in neighbor_tables_to_fetch}
+        if neighbor_lower:
+            for chunk_model, doc_model in all_schema_rows:
+                c_id = str(chunk_model.id)
+                if c_id in collected_by_id:
+                    continue
+                meta = chunk_model.metadata_ or doc_model.metadata_ or {}
+                t_name = str(meta.get("table_name", "")).strip()
+                if t_name and t_name.lower() in neighbor_lower:
+                    collected_by_id[c_id] = DocumentChunk(
+                        id=c_id,
+                        document_id=str(chunk_model.document_id),
+                        chunk_index=chunk_model.chunk_index,
+                        chunk_text=chunk_model.chunk_text,
+                        metadata=meta,
+                        similarity_score=0.88
+                    )
+                    seen_tables.add(t_name.lower())
+
+        return list(collected_by_id.values())[:max(top_k + 4, 10)]
+
     async def delete_schema_documents(
         self,
         connection_id: str,
@@ -127,3 +238,158 @@ class VectorRepository:
         )
         await self.session.commit()
         return len(doc_ids)
+
+    async def search_learned_rules(
+        self,
+        query_embedding: List[float],
+        prompt_text: str,
+        top_k: int = 5,
+        connection_id: Optional[str] = None
+    ) -> List[DocumentChunk]:
+        """
+        Recupera las cápsulas de entrenamiento enseñadas por el usuario
+        (`custom_relation`, `business_rule`, `kpi_formula`, `sql_example`) combinando
+        similitud vectorial en pgvector + coincidencia léxica de tablas mencionadas.
+        """
+        learned_categories = ["custom_relation", "business_rule", "kpi_formula", "sql_example"]
+        distance = KnowledgeVectorChunkModel.embedding.cosine_distance(query_embedding)
+        stmt = (
+            select(KnowledgeVectorChunkModel, KnowledgeDocumentModel, distance.label("distance"))
+            .join(KnowledgeDocumentModel, KnowledgeVectorChunkModel.document_id == KnowledgeDocumentModel.id)
+            .where(KnowledgeDocumentModel.category.in_(learned_categories))
+            .order_by(distance)
+            .limit(top_k * 2)
+        )
+        rows = (await self.session.execute(stmt)).all()
+
+        collected: Dict[str, DocumentChunk] = {}
+        norm_prompt = remove_accents((prompt_text or "").lower())
+
+        for chunk_model, doc_model, dist in rows:
+            meta = chunk_model.metadata_ or doc_model.metadata_ or {}
+            doc_conn = meta.get("connection_id")
+            if connection_id and doc_conn and str(doc_conn) != str(connection_id):
+                continue
+
+            c_id = str(chunk_model.id)
+            sim = round(max(0.0, 1.0 - float(dist)), 4)
+            # Impulsar score si menciona una tabla presente en el prompt
+            for rel_t in (meta.get("related_tables") or []):
+                rel_norm = remove_accents(str(rel_t).lower())
+                if len(rel_norm) >= 3 and re.search(rf"\b{re.escape(rel_norm)}\b", norm_prompt):
+                    sim = max(sim, 0.96)
+
+            collected[c_id] = DocumentChunk(
+                id=c_id,
+                document_id=str(chunk_model.document_id),
+                chunk_index=chunk_model.chunk_index,
+                chunk_text=chunk_model.chunk_text,
+                metadata={"category": doc_model.category, "title": doc_model.title, **meta},
+                similarity_score=sim
+            )
+
+        sorted_rules = sorted(collected.values(), key=lambda x: x.similarity_score or 0.0, reverse=True)
+        return sorted_rules[:top_k]
+
+    async def list_learned_rules(
+        self,
+        connection_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Lista todas las cápsulas de aprendizaje registradas por el usuario."""
+        learned_categories = ["custom_relation", "business_rule", "kpi_formula", "sql_example"]
+        stmt = (
+            select(KnowledgeDocumentModel)
+            .where(KnowledgeDocumentModel.category.in_(learned_categories))
+            .order_by(KnowledgeDocumentModel.created_at.desc())
+            .limit(100)
+        )
+        docs = (await self.session.execute(stmt)).scalars().all()
+        items: List[Dict[str, Any]] = []
+        for d in docs:
+            meta = d.metadata_ or {}
+            doc_conn = meta.get("connection_id")
+            if connection_id and doc_conn and str(doc_conn) != str(connection_id):
+                continue
+            items.append({
+                "id": str(d.id),
+                "title": d.title,
+                "category": d.category,
+                "department": d.department,
+                "content": d.content,
+                "metadata": meta,
+                "created_at": d.created_at.isoformat() if d.created_at else None
+            })
+        return items
+
+    async def delete_learned_rule(self, document_id: str) -> bool:
+        """Elimina una cápsula de conocimiento por su UUID."""
+        try:
+            doc_uuid = uuid.UUID(str(document_id))
+        except Exception:
+            return False
+
+        doc = await self.session.get(KnowledgeDocumentModel, doc_uuid)
+        if not doc:
+            return False
+
+        await self.session.delete(doc)
+        await self.session.commit()
+        return True
+
+    async def attach_custom_relation_to_schema_docs(
+        self,
+        source_table: str,
+        target_table: str,
+        join_hint: str,
+        connection_id: Optional[str] = None
+    ) -> int:
+        """
+        Vincula una relación enseñada por el usuario (`custom_relation`) directamente
+        en los metadatos `related_tables` y `join_hints` de los esquemas `db_schema`
+        en pgvector para que la expansión `1-Hop` funcione inmediatamente.
+        """
+        if not source_table or not target_table:
+            return 0
+
+        stmt = (
+            select(KnowledgeVectorChunkModel, KnowledgeDocumentModel)
+            .join(KnowledgeDocumentModel, KnowledgeVectorChunkModel.document_id == KnowledgeDocumentModel.id)
+            .where(KnowledgeDocumentModel.category == "db_schema")
+        )
+        if connection_id:
+            stmt = stmt.where(
+                KnowledgeDocumentModel.metadata_["connection_id"].astext == str(connection_id)
+            )
+
+        rows = (await self.session.execute(stmt)).all()
+        updated = 0
+        src_low = source_table.strip().lower()
+        tgt_low = target_table.strip().lower()
+
+        for chunk_model, doc_model in rows:
+            meta = dict(chunk_model.metadata_ or doc_model.metadata_ or {})
+            t_name = str(meta.get("table_name", "")).strip()
+            if not t_name:
+                continue
+            t_low = t_name.lower()
+            if t_low not in (src_low, tgt_low):
+                continue
+
+            other_table = target_table if t_low == src_low else source_table
+            rel_list = list(meta.get("related_tables") or [])
+            if other_table not in rel_list:
+                rel_list.append(other_table)
+
+            hints_list = list(meta.get("join_hints") or [])
+            if join_hint and join_hint not in hints_list:
+                hints_list.insert(0, join_hint)
+
+            meta["related_tables"] = rel_list
+            meta["join_hints"] = hints_list
+            chunk_model.metadata_ = dict(meta)
+            doc_model.metadata_ = dict(meta)
+            updated += 1
+
+        if updated > 0:
+            await self.session.commit()
+        return updated

@@ -206,10 +206,19 @@ class ManageConnectionsUseCase:
         enriched_tables = []
         for t in all_tables:
             t_name = t["table_name"]
+            fks = t.get("foreign_keys", [])
+            refs_by = t.get("referenced_by", [])
+            related_tables = t.get("related_tables", [])
+
             enriched_tables.append({
                 "table_name": t_name,
+                "primary_key": t.get("primary_key", "id"),
+                "descriptive_columns": t.get("descriptive_columns", []),
                 "columns_count": t["columns_count"],
                 "columns": t["columns"],
+                "foreign_keys": fks,
+                "referenced_by": refs_by,
+                "related_tables": related_tables,
                 "column_names_preview": ", ".join([c["name"] for c in t["columns"][:8]])
                 + (f" (+{len(t['columns']) - 8} más)" if len(t["columns"]) > 8 else ""),
                 "is_vectorized": t_name.lower() in synced_set
@@ -222,12 +231,82 @@ class ManageConnectionsUseCase:
             "tables": enriched_tables
         }
 
+    @staticmethod
+    def build_relational_schema_embedding_text(
+        conn_name: str,
+        engine_label: str,
+        database_name: str,
+        table: Dict[str, Any]
+    ) -> tuple[str, List[str]]:
+        """
+        Construye el documento semántico enriquecido para pgvector siguiendo las prácticas de
+        `embedding-strategies` y `rag-engineer`: incluye clasificación de columnas, llaves foráneas,
+        columnas descriptivas de las tablas relacionadas y reglas explícitas de JOIN.
+        """
+        t_name = table["table_name"]
+        pk_col = table.get("primary_key", "id")
+        desc_cols = table.get("descriptive_columns", [])
+        fks = table.get("foreign_keys", [])
+        refs_by = table.get("referenced_by", [])
+
+        columns_desc = ", ".join(
+            [
+                f"{col['name']} ({col['type']}" + (f", nota: '{col['comment']}'" if col.get("comment") else "") + ")"
+                for col in table.get("columns", [])
+            ]
+        )
+        desc_cols_str = ", ".join([f"`{c}`" for c in desc_cols]) if desc_cols else "ninguna"
+
+        join_hints: List[str] = []
+        fk_lines: List[str] = []
+        for fk in fks:
+            src_col = fk["column"]
+            ref_t = fk["referenced_table"]
+            ref_col = fk["referenced_column"]
+            target_labels = fk.get("descriptive_columns") or []
+            labels_str = ", ".join([f"`{ref_t}.{lbl}`" for lbl in target_labels[:3]]) if target_labels else f"`{ref_t}.*`"
+            join_sql = f"JOIN {ref_t} ON {t_name}.{src_col} = {ref_t}.{ref_col}"
+            join_hints.append(f"{join_sql} (columnas descriptivas de {ref_t}: {', '.join(target_labels[:3]) or ref_col})")
+            fk_lines.append(
+                f"  - La columna llave foránea `{t_name}.{src_col}` referencia a `{ref_t}.{ref_col}`. "
+                f"IMPORTANTE: `{src_col}` solo contiene el ID de relación; para obtener el nombre o datos reales de `{ref_t}` "
+                f"en consultas o gráficos SIEMPRE haz `{join_sql}` y selecciona {labels_str} en lugar de `{src_col}`."
+            )
+
+        incoming_lines: List[str] = []
+        for rb in refs_by[:8]:
+            s_t = rb["source_table"]
+            s_col = rb["source_column"]
+            t_col = rb["target_column"]
+            join_sql = f"JOIN {s_t} ON {t_name}.{t_col} = {s_t}.{s_col}"
+            join_hints.append(join_sql)
+            incoming_lines.append(
+                f"  - La tabla `{s_t}` se vincula con `{t_name}` mediante `{s_t}.{s_col} = {t_name}.{t_col}` (`{join_sql}`)."
+            )
+
+        relations_block = ""
+        if fk_lines or incoming_lines:
+            relations_block = "\nRELACIONES Y JOINS APRENDIDOS ENTRE TABLAS:\n"
+            if fk_lines:
+                relations_block += "\n".join(fk_lines) + "\n"
+            if incoming_lines:
+                relations_block += "\n".join(incoming_lines) + "\n"
+
+        content = (
+            f"Conexión: {conn_name} | Motor: {engine_label} | Base de datos: `{database_name}`.\n"
+            f"Tabla: `{t_name}` (Llave primaria: `{pk_col}` | Columnas descriptivas/etiquetas: {desc_cols_str}).\n"
+            f"Columnas disponibles ({len(table.get('columns', []))}): {columns_desc}."
+            f"{relations_block}"
+            f"Usa esta tabla y sus relaciones JOIN para consultas SQL y gráficos exactos sobre `{t_name}` en `{database_name}`."
+        )
+        return content, join_hints
+
     async def vectorize_selected_tables(
         self,
         connection_id: str,
         selected_tables: List[str]
     ) -> Dict[str, Any]:
-        """Vectoriza en pgvector únicamente las tablas elegidas por el usuario para esa conexión."""
+        """Vectoriza en pgvector únicamente las tablas elegidas por el usuario junto con su grafo de relaciones."""
         if not selected_tables:
             raise ValueError("Debe seleccionar al menos una tabla para vectorizar.")
 
@@ -256,14 +335,11 @@ class ManageConnectionsUseCase:
 
         for table in matched_tables:
             t_name = table["table_name"]
-            columns_desc = ", ".join(
-                [f"{col['name']} ({col['type']})" for col in table["columns"]]
-            )
-            content = (
-                f"Conexión: {conn_model.name} | Motor: {engine_label} | Base de datos: `{conn_model.database_name}`.\n"
-                f"Tabla: `{t_name}`.\n"
-                f"Columnas disponibles ({len(table['columns'])}): {columns_desc}.\n"
-                f"Usa esta tabla para consultas SQL sobre `{t_name}` en `{conn_model.database_name}`."
+            content, join_hints = self.build_relational_schema_embedding_text(
+                conn_name=conn_model.name,
+                engine_label=engine_label,
+                database_name=conn_model.database_name,
+                table=table
             )
 
             await self.ingest_use_case.execute(
@@ -277,6 +353,10 @@ class ManageConnectionsUseCase:
                     "engine": conn_model.engine,
                     "database_name": conn_model.database_name,
                     "table_name": t_name,
+                    "primary_key": table.get("primary_key", "id"),
+                    "descriptive_columns": table.get("descriptive_columns", []),
+                    "related_tables": table.get("related_tables", []),
+                    "join_hints": join_hints,
                     "columns_count": len(table["columns"])
                 }
             )
