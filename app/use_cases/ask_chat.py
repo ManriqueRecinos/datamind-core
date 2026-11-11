@@ -25,6 +25,7 @@ from app.use_cases.intent_classifier import IntentClassifier, remove_accents
 from app.use_cases.manage_connections import ManageConnectionsUseCase
 from app.use_cases.sql_repair_agent import SqlRepairAgent
 from app.infrastructure.database.repositories.unresolved_terms_repository import UnresolvedQueryTermRepository
+from app.infrastructure.analytics.data_humanizer import DataHumanizer
 from app.core.telemetry_resilience import resilience_metrics
 
 
@@ -617,47 +618,55 @@ class AskChatUseCase:
                 )
 
                 # ==============================================================================
-                # Feature 006: Detección de Ambigüedad y Aclaración Activa
+                # Feature 007: Detección de Entidad Inequívoca y Prevención de Falsa Aclaración
                 # ==============================================================================
                 is_ambiguous = False
                 ambiguity_reason = None
                 options_list = []
 
-                # Verificar si el usuario mencionó explícitamente el nombre exacto de alguna tabla en el prompt
-                norm_prompt_lower = remove_accents((prompt or "").lower())
-                explicitly_named_tables = set()
-                if schema_chunks:
-                    for ch in schema_chunks:
-                        t_raw = str((ch.metadata or {}).get("table_name", "")).strip()
-                        if t_raw and len(t_raw) >= 3:
-                            t_norm = remove_accents(t_raw.lower())
-                            if re.search(rf"\b{re.escape(t_norm)}\b", norm_prompt_lower):
-                                explicitly_named_tables.add(t_raw.lower())
+                # Obtener la lista de tablas sincronizadas reales de la conexión
+                synced_tbls = active_conn.synced_tables if (active_conn and active_conn.synced_tables) else []
+                is_unambiguous, unambiguous_target = DataHumanizer.resolve_unambiguous_entity(prompt, synced_tbls)
 
-                # Si el usuario mencionó explícitamente una sola tabla unívoca, no hay ambigüedad
-                if len(explicitly_named_tables) == 1:
+                if is_unambiguous and unambiguous_target:
+                    # El usuario nombró de forma evidente la entidad (ej: 'usuarios' -> 'users')
                     is_ambiguous = False
-                elif schema_chunks and len(schema_chunks) >= 1:
-                    top_chunk = schema_chunks[0]
-                    top_score = getattr(top_chunk, "similarity_score", 0.0) or 0.0
+                else:
+                    # Verificar si el usuario mencionó explícitamente el nombre exacto de alguna tabla en el prompt
+                    norm_prompt_lower = remove_accents((prompt or "").lower())
+                    explicitly_named_tables = set()
+                    if schema_chunks:
+                        for ch in schema_chunks:
+                            t_raw = str((ch.metadata or {}).get("table_name", "")).strip()
+                            if t_raw and len(t_raw) >= 3:
+                                t_norm = remove_accents(t_raw.lower())
+                                if re.search(rf"\b{re.escape(t_norm)}\b", norm_prompt_lower):
+                                    explicitly_named_tables.add(t_raw.lower())
 
-                    # 1. Confianza general baja (< 0.65) si no hay coincidencia léxica fuerte
-                    if top_score < 0.65 and len(schema_chunks) >= 2 and not explicitly_named_tables:
-                        is_ambiguous = True
-                        ambiguity_reason = "low_retrieval_confidence"
+                    # Si el usuario mencionó explícitamente una sola tabla unívoca, no hay ambigüedad
+                    if len(explicitly_named_tables) == 1:
+                        is_ambiguous = False
+                    elif schema_chunks and len(schema_chunks) >= 1:
+                        top_chunk = schema_chunks[0]
+                        top_score = getattr(top_chunk, "similarity_score", 0.0) or 0.0
 
-                    # 2. Empate técnico entre los 2 mejores candidatos (delta <= 0.04)
-                    elif len(schema_chunks) >= 2 and not explicitly_named_tables:
-                        second_chunk = schema_chunks[1]
-                        second_score = getattr(second_chunk, "similarity_score", 0.0) or 0.0
-                        delta = abs(top_score - second_score)
-                        
-                        t1 = str((top_chunk.metadata or {}).get("table_name", "")).strip()
-                        t2 = str((second_chunk.metadata or {}).get("table_name", "")).strip()
-
-                        if delta <= 0.04 and t1 and t2 and t1.lower() != t2.lower():
+                        # 1. Confianza general baja (< 0.65) si no hay coincidencia léxica fuerte
+                        if top_score < 0.65 and len(schema_chunks) >= 2 and not explicitly_named_tables:
                             is_ambiguous = True
-                            ambiguity_reason = "ambiguous_candidates"
+                            ambiguity_reason = "low_retrieval_confidence"
+
+                        # 2. Empate técnico entre los 2 mejores candidatos (delta <= 0.04)
+                        elif len(schema_chunks) >= 2 and not explicitly_named_tables:
+                            second_chunk = schema_chunks[1]
+                            second_score = getattr(second_chunk, "similarity_score", 0.0) or 0.0
+                            delta = abs(top_score - second_score)
+                            
+                            t1 = str((top_chunk.metadata or {}).get("table_name", "")).strip()
+                            t2 = str((second_chunk.metadata or {}).get("table_name", "")).strip()
+
+                            if delta <= 0.04 and t1 and t2 and t1.lower() != t2.lower():
+                                is_ambiguous = True
+                                ambiguity_reason = "ambiguous_candidates"
 
                     if is_ambiguous:
                         seen_opts = set()
@@ -773,12 +782,13 @@ class AskChatUseCase:
                     )
 
                     sql_prompt = (
-                        f"Eres un experto en SQL para {engine_title} conectado a la base de datos `{db_name}` ({conn_label}). "
+                        f"Eres un analista de datos de negocios experto en {engine_title} para la base de datos `{db_name}` ({conn_label}). "
                         f"Escribe ÚNICAMENTE una consulta SQL SELECT válida para {engine_title} "
                         f"que responda a la solicitud del usuario, sin explicaciones ni markdown.\n"
                         f"ESQUEMAS DE TABLAS Y RELACIONES VECTORIZADOS DISPONIBLES EN `{db_name}`:\n{schema_context}{joins_summary}{rules_summary}{dynamic_rules_block}\n\n"
                         f"REGLAS OBLIGATORIAS DE ANÁLISIS RELACIONAL Y GRÁFICOS:\n"
                         f"- Usa únicamente las tablas y columnas listadas en los esquemas.\n"
+                        f"- PROHIBICIÓN ESTRICTA DE SEGURIDAD: NUNCA incluyas en el SELECT columnas que almacenen contraseñas, tokens de autenticación o secretos (ej: password, remember_token, gotify_pass, gotify_app_token, api_token, secret, hash, salt).\n"
                         f"- SOPORTE MULTI-ESQUEMA: Si la tabla contiene prefijo de esquema (ej: `produccion.ordenes`, `inventario.items`, `hop.registro`), SIEMPRE califica el nombre completo en `FROM` y `JOIN` con su esquema exacto (ej. `FROM produccion.ordenes`). Para tablas del esquema `public`, puedes usar `public.tabla` o `tabla`.\n"
                         f"- APLICA ESTRICTAMENTE las REGLAS DE NEGOCIO, DICCIONARIO Y EJEMPLOS SQL ENSEÑADOS POR EL USUARIO si aparecen arriba.\n"
                         f"- SI EXISTEN <<<DIRECTIVAS_APRENDIDAS>>>, APLÍCALAS DE FORMA OBLIGATORIA Y PRIORITARIA en las cláusulas WHERE y filtros correspondientes.\n"
@@ -880,16 +890,20 @@ class AskChatUseCase:
                         if row_count > 0:
                             has_tabular_data = True
                             dataset_id = f"ds_{uuid.uuid4().hex[:12]}"
-                            columns_list = list(rows[0].keys())
-                            preview_rows = rows[:10]
 
-                            # Guardar dataset en caché para botón de Excel y Constructor de Gráficos
+                            # Feature 007: Purgar datos sensibles y humanizar columnas para negocio
+                            raw_columns = list(rows[0].keys())
+                            human_cols, sanitized_rows, _ = DataHumanizer.sanitize_and_humanize(raw_columns, rows)
+                            columns_list = human_cols
+                            preview_rows = sanitized_rows[:10]
+
+                            # Guardar dataset en caché para botón de Excel y Constructor de Gráficos (limpio y sin passwords)
                             dataset_model = QueryDatasetModel(
                                 dataset_id=dataset_id,
                                 session_id=s_id,
                                 sql_executed=generated_sql,
                                 columns=columns_list,
-                                rows=rows,
+                                rows=sanitized_rows,
                                 row_count=row_count,
                                 expires_at=datetime.now(timezone.utc) + timedelta(hours=self.settings.dataset_cache_ttl_hours)
                             )
@@ -899,44 +913,42 @@ class AskChatUseCase:
                             # Analizar columnas y determinar si requiere selección guiada de campos (Opción A)
                             chart_config = self.analyze_columns_for_chart(
                                 columns=columns_list,
-                                rows=rows,
+                                rows=sanitized_rows,
                                 wants_chart=wants_chart,
                                 wants_table=wants_table,
                                 preferred_type=preferred_chart_type,
                                 prompt=prompt
                             )
 
-                            sample_preview = json.dumps(rows[:5], ensure_ascii=False)
+                            sample_preview = json.dumps(sanitized_rows[:5], ensure_ascii=False)
                             chart_instruction = ""
                             dims_str = ", ".join([f"`{c}`" for c in chart_config["dimension_columns"][:8]]) or "ninguna"
                             metrics_str = ", ".join([f"`{c}`" for c in chart_config["metric_columns"][:8]]) or "conteo de registros (`COUNT`)"
 
-                            if chart_config.get("needs_field_selection"):
+                            if chart_config.get("needs_field_selection") and wants_chart:
                                 chart_instruction = (
-                                    f"\nIMPORTANTE (FLUJO GUIADO DE GRÁFICOS - OPCIÓN A):\n"
-                                    f"- Ya analizaste y cruzaste las tablas solicitadas, obteniendo las siguientes columnas:\n"
-                                    f"  * **Campos de Categoría / Estado / Agrupación (Eje X)**: {dims_str}\n"
-                                    f"  * **Campos Numéricos / Métricas (Eje Y)**: {metrics_str}\n"
-                                    f"- Explícale primero un resumen claro de los registros encontrados en las tablas vinculadas.\n"
-                                    f"- Luego **PREGÚNTALE EXPLÍCITAMENTE AL USUARIO**: *\"¿Con cuáles de estos campos deseas que genere el gráfico?\"* mostrándole en una lista Markdown las opciones de **Eje X** y **Eje Y** que acabas de detectar.\n"
-                                    f"- Indícale que puede elegir los campos con un clic en el **Asistente de Selección de Campos** que aparece justo debajo (y pulsar **Generar Gráfico**) o simplemente responderte en el chat diciendo qué campos usar."
+                                    f"\nIMPORTANTE (FLUJO GUIADO DE GRÁFICOS):\n"
+                                    f"- Ya analizaste los registros, obteniendo los siguientes campos:\n"
+                                    f"  * **Campos de Agrupación (Eje X)**: {dims_str}\n"
+                                    f"  * **Métricas Numéricas (Eje Y)**: {metrics_str}\n"
+                                    f"- Pregúntale amablemente al usuario con cuáles de estos campos desea generar el gráfico."
                                 )
                             elif wants_chart:
                                 chart_instruction = (
                                     f"\nIMPORTANTE (GRÁFICO GENERADO):\n"
                                     f"- Confirma que has generado el gráfico con el campo `{chart_config['x_field']}` en el Eje X "
-                                    f"y `{chart_config['aggregation']}({chart_config['y_field'] or 'registros'})` en el Eje Y, "
-                                    f"y menciona que también tiene disponibles las columnas {dims_str} y {metrics_str} por si desea cambiarlas."
+                                    f"y `{chart_config['aggregation']}({chart_config['y_field'] or 'registros'})` en el Eje Y."
                                 )
 
                             synthesis_prompt = (
-                                f"Se ejecutó una consulta en la base de datos {engine_title} `{db_name}` ({conn_label}).\n"
-                                f"Pregunta del usuario: {prompt}\n"
-                                f"Consulta SQL ejecutada: {generated_sql}\n"
-                                f"Total registros encontrados: {row_count}.\n"
-                                f"Muestra de datos (primeros 5): {sample_preview}\n\n"
-                                f"Redacta una respuesta concisa, ejecutiva y clara en español usando formato Markdown "
-                                f"(máximo 2 párrafos cortos, destacando los puntos clave).{chart_instruction}"
+                                f"Eres un asistente corporativo de análisis empresarial que habla en español claro, profesional y de negocios.\n"
+                                f"Pregunta del colaborador: {prompt}\n"
+                                f"Total de registros recuperados: {row_count}.\n"
+                                f"Muestra representativa de los datos de negocio: {sample_preview}\n\n"
+                                f"DIRECTIVAS ESTRICTAS DE COMUNICACIÓN CON EL USUARIO:\n"
+                                f"1. Habla 100% en términos humanos de procesos y negocios. NUNCA menciones nombres físicos de tablas (como 'users', 'company_user', 'companies', 'hop'), ni nombres de base de datos, ni la sentencia SQL ejecutada.\n"
+                                f"2. Refiérete a los datos como 'los usuarios registrados', 'las empresas asociadas' o 'la información consultada'.\n"
+                                f"3. Redacta una respuesta ejecutiva, amable y directa de máximo 2 párrafos concisos destacando los puntos más importantes.{chart_instruction}"
                             )
                             try:
                                 message_text = await self.ollama.generate_completion(
