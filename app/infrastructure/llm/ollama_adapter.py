@@ -28,8 +28,14 @@ class OllamaAdapter(LLMClientInterface):
             data = response.json()
             return data["embedding"]
 
-    async def generate_completion(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Genera una respuesta de texto completa usando qwen2.5:3b."""
+    async def generate_completion(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None
+    ) -> str:
+        """Genera una respuesta de texto completa usando qwen2.5:3b con opciones de rendimiento."""
         payload = {
             "model": self.llm_model,
             "prompt": prompt,
@@ -37,6 +43,14 @@ class OllamaAdapter(LLMClientInterface):
         }
         if system_prompt:
             payload["system"] = system_prompt
+
+        options = {}
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+        if temperature is not None:
+            options["temperature"] = temperature
+        if options:
+            payload["options"] = options
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(

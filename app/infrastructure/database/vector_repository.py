@@ -291,6 +291,63 @@ class VectorRepository:
         sorted_rules = sorted(collected.values(), key=lambda x: x.similarity_score or 0.0, reverse=True)
         return sorted_rules[:top_k]
 
+    async def search_dynamic_knowledge_rules(
+        self,
+        query_embedding: List[float],
+        user_id: str,
+        connection_id: Optional[str] = None,
+        top_k: int = 3,
+        similarity_threshold: float = 0.75
+    ) -> List[Dict[str, Any]]:
+        """
+        Recupera reglas activas de aprendizaje implícito (scope global o scope user del usuario actual).
+        Exige status='verified' para global o status in ('candidate', 'verified') para user.
+        Filtra por umbral de similitud coseno con prefijo search_query.
+        """
+        distance = KnowledgeVectorChunkModel.embedding.cosine_distance(query_embedding)
+        
+        stmt = (
+            select(KnowledgeVectorChunkModel, KnowledgeDocumentModel, distance.label("distance"))
+            .join(KnowledgeDocumentModel, KnowledgeVectorChunkModel.document_id == KnowledgeDocumentModel.id)
+            .where(
+                (
+                    (KnowledgeVectorChunkModel.scope == "global") & (KnowledgeVectorChunkModel.status == "verified")
+                ) | (
+                    (KnowledgeVectorChunkModel.scope == "user") & 
+                    (KnowledgeVectorChunkModel.user_id == user_id) & 
+                    (KnowledgeVectorChunkModel.status.in_(["candidate", "verified"]))
+                )
+            )
+        )
+        if connection_id:
+            try:
+                conn_uuid = uuid.UUID(str(connection_id))
+                stmt = stmt.where(KnowledgeVectorChunkModel.connection_id == conn_uuid)
+            except Exception:
+                pass
+
+        stmt = stmt.order_by(distance).limit(top_k * 2)
+        rows = (await self.session.execute(stmt)).all()
+
+        results = []
+        for chunk, doc, dist in rows:
+            sim = round(max(0.0, 1.0 - float(dist)), 4)
+            if sim >= similarity_threshold:
+                results.append({
+                    "id": str(chunk.id),
+                    "title": doc.title,
+                    "target_entity": chunk.target_entity,
+                    "target_column": chunk.target_column,
+                    "prescriptive_condition": chunk.prescriptive_condition,
+                    "content": chunk.chunk_text,
+                    "similarity": sim,
+                    "scope": chunk.scope
+                })
+
+        # Ordenar y cortar top_k
+        results.sort(key=lambda x: x["similarity"], reverse=True)
+        return results[:top_k]
+
     async def list_learned_rules(
         self,
         connection_id: Optional[str] = None

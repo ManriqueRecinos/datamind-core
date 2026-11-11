@@ -23,6 +23,9 @@ from app.infrastructure.llm.sql_guardrail import SQLGuardrail
 from app.use_cases.ingest_knowledge import IngestKnowledgeUseCase
 from app.use_cases.intent_classifier import IntentClassifier, remove_accents
 from app.use_cases.manage_connections import ManageConnectionsUseCase
+from app.use_cases.sql_repair_agent import SqlRepairAgent
+from app.infrastructure.database.repositories.unresolved_terms_repository import UnresolvedQueryTermRepository
+from app.core.telemetry_resilience import resilience_metrics
 
 
 class AskChatUseCase:
@@ -54,7 +57,7 @@ class AskChatUseCase:
             title=prompt[:55] + ("..." if len(prompt) > 55 else "")
         )
         self.session.add(new_session)
-        await self.session.flush()
+        await self.session.commit()
         return new_session.id
 
     @staticmethod
@@ -225,9 +228,11 @@ class AskChatUseCase:
         user_id: str = "user",
         connection_id: Optional[str] = None,
         user_role: str = "user",
-        user_permissions: Optional[List[str]] = None
+        user_permissions: Optional[List[str]] = None,
+        retry_message_id: Optional[str] = None,
+        attachment_ids: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Ejecuta la respuesta completa síncrona evaluando políticas y roles RBAC."""
+        """Ejecuta la respuesta completa síncrona evaluando políticas, roles RBAC y reintento sin duplicación."""
         start_time = time.time()
         s_id = await self._get_or_create_session(session_id, user_id, prompt)
         perms = user_permissions or []
@@ -282,7 +287,20 @@ class AskChatUseCase:
         columns_list = []
         preview_rows = []
         chart_config = None
+        rules_applied = []
+        clarification_payload = None
         message_text = ""
+
+        # Obtener el turno previo del asistente y su SQL (si existieron) para contexto del detector
+        prev_asst_stmt = (
+            select(ChatMessageModel)
+            .where(ChatMessageModel.session_id == s_id, ChatMessageModel.role == "assistant")
+            .order_by(ChatMessageModel.created_at.desc())
+            .limit(1)
+        )
+        prev_asst_msg = (await self.session.execute(prev_asst_stmt)).scalars().first()
+        prev_asst_content = prev_asst_msg.content if prev_asst_msg else None
+        prev_asst_sql = prev_asst_msg.generated_sql if prev_asst_msg else None
 
         # Verificar si en la misma sesión existe un dataset reciente y el usuario está respondiendo
         # con qué campos crear el gráfico (flujo conversacional en 2 pasos — Opción A)
@@ -318,15 +336,82 @@ class AskChatUseCase:
                 wants_chart = True
                 reused_previous_dataset = True
 
-        # Guardar el mensaje del usuario en la sesión
-        user_msg_model = ChatMessageModel(
-            session_id=s_id,
-            role="user",
-            content=prompt,
-            intent=intent
-        )
-        self.session.add(user_msg_model)
-        await self.session.flush()
+        # Detección de resolución de aclaración rápida (formato /clarify <target_entity>)
+        if prompt.strip().startswith("/clarify "):
+            clarified_target = prompt.strip().replace("/clarify ", "", 1).strip()
+            resilience_metrics.inc_clarifications_resolved()
+            try:
+                # Guardar como candidato personal scope='user', status='candidate'
+                active_c = await self.conn_manager.get_active_or_target_connection(connection_id)
+                target_c_id = active_c.id if active_c else None
+                ingest_uc = IngestKnowledgeUseCase(self.session, ollama=self.ollama)
+                cand_doc = await ingest_uc.execute(
+                    title=f"Sinónimo aclarado: {clarified_target}",
+                    category="business_rule",
+                    department=active_c.name if active_c else "Aclaraciones",
+                    content=f"El término aclarado corresponde a la tabla `{clarified_target}`.",
+                    metadata={
+                        "connection_id": str(target_c_id) if target_c_id else None,
+                        "target_entity": clarified_target,
+                        "trigger_signal": "clarification_resolved",
+                        "status": "candidate",
+                        "scope": "user",
+                        "user_id": user_id
+                    }
+                )
+            except Exception as cand_err:
+                pass
+            prompt = f"Consulta la tabla {clarified_target}"
+
+        # Gestión de Persistencia del Mensaje del Usuario: Reintento o Mensaje Nuevo
+        reused_user_msg = None
+        if retry_message_id:
+            try:
+                parsed_retry_id = uuid.UUID(retry_message_id)
+                existing_msg = await self.session.get(ChatMessageModel, parsed_retry_id)
+                if not existing_msg:
+                    raise ValueError(f"El mensaje a reintentar '{retry_message_id}' no existe.")
+                if existing_msg.session_id != s_id:
+                    raise ValueError("El mensaje a reintentar no pertenece a la sesión activa.")
+                if existing_msg.role != "user":
+                    raise ValueError("Solo se pueden reintentar mensajes emitidos por el usuario.")
+
+                # Verificar que no exista ya una respuesta de rol 'assistant' posterior en esta sesión
+                later_assist_stmt = (
+                    select(ChatMessageModel)
+                    .where(
+                        ChatMessageModel.session_id == s_id,
+                        ChatMessageModel.role == "assistant",
+                        ChatMessageModel.created_at >= existing_msg.created_at
+                    )
+                )
+                existing_assistant = (await self.session.execute(later_assist_stmt)).scalars().first()
+                if existing_assistant:
+                    raise ValueError("Este mensaje ya cuenta con una respuesta generada en la sesión.")
+
+                existing_msg.content = prompt
+                existing_msg.intent = intent
+                reused_user_msg = existing_msg
+                await self.session.commit()
+            except ValueError:
+                raise
+            except Exception as e:
+                raise ValueError(f"Error validando reintento de mensaje: {str(e)}")
+
+        user_msg_id = None
+        if not reused_user_msg:
+            # Guardar el nuevo mensaje del usuario en la sesión con commit inmediato
+            user_msg_model = ChatMessageModel(
+                session_id=s_id,
+                role="user",
+                content=prompt,
+                intent=intent
+            )
+            self.session.add(user_msg_model)
+            await self.session.commit()
+            user_msg_id = str(user_msg_model.id)
+        else:
+            user_msg_id = str(reused_user_msg.id)
 
         if intent == "teach_knowledge":
             # El usuario le está enseñando una regla, relación JOIN, diccionario o fórmula directamente en el chat
@@ -426,7 +511,41 @@ class AskChatUseCase:
             message_text = await self.ollama.generate_completion(prompt=prompt, system_prompt=sys_prompt)
 
         elif intent == "data_query":
-            if reused_previous_dataset and last_dataset:
+            # 0. Si la petición incluye archivos adjuntos cargados en la sesión, consultar DuckDB localmente
+            if attachment_ids:
+                from app.use_cases.query_attachment import QueryAttachmentUseCase
+                query_att_uc = QueryAttachmentUseCase(self.session, ollama=self.ollama)
+                attached_records = await query_att_uc.get_attachments(attachment_ids)
+                if attached_records:
+                    message_text, generated_sql, rows, row_count = await query_att_uc.generate_and_execute_query(
+                        prompt=prompt,
+                        attachments=attached_records
+                    )
+                    if row_count > 0:
+                        has_tabular_data = True
+                        dataset_id = f"ds_{uuid.uuid4().hex[:12]}"
+                        columns_list = list(rows[0].keys())
+                        preview_rows = rows[:10]
+                        chart_config = self.analyze_columns_for_chart(
+                            columns=columns_list,
+                            rows=rows,
+                            wants_chart=wants_chart,
+                            preferred_type=preferred_chart_type,
+                            prompt=prompt,
+                            force_ready=False
+                        )
+                        dataset_model = QueryDatasetModel(
+                            dataset_id=dataset_id,
+                            session_id=s_id,
+                            sql_executed=generated_sql or "SELECT * FROM attachment",
+                            columns=columns_list,
+                            rows=rows,
+                            row_count=row_count,
+                            expires_at=datetime.now(timezone.utc) + timedelta(hours=self.settings.dataset_cache_ttl_hours)
+                        )
+                        self.session.add(dataset_model)
+                        await self.session.commit()
+            elif reused_previous_dataset and last_dataset:
                 # Paso 2 del flujo Opción A: el usuario respondió en el chat indicando con qué campos crear el gráfico
                 has_tabular_data = True
                 dataset_id = last_dataset.dataset_id
@@ -497,69 +616,265 @@ class AskChatUseCase:
                     connection_id=target_conn_id
                 )
 
-                # 2. Recuperar reglas de negocio, relaciones manuales, fórmulas y ejemplos SQL aprendidos del usuario
-                learned_rule_chunks = await self.vector_repo.search_learned_rules(
-                    query_embedding=query_vec,
-                    prompt_text=prompt,
-                    top_k=5,
-                    connection_id=target_conn_id
-                )
+                # ==============================================================================
+                # Feature 006: Detección de Ambigüedad y Aclaración Activa
+                # ==============================================================================
+                is_ambiguous = False
+                ambiguity_reason = None
+                options_list = []
 
-                # Extraer pistas explícitas de JOIN aprendidas en los metadatos vectoriales
-                learned_joins: List[str] = []
-                for ch in schema_chunks:
-                    for jh in (ch.metadata or {}).get("join_hints", []) or []:
-                        if jh not in learned_joins:
-                            learned_joins.append(jh)
-                for r_ch in learned_rule_chunks:
-                    jh_custom = (r_ch.metadata or {}).get("join_hint")
-                    if jh_custom and jh_custom not in learned_joins:
-                        learned_joins.insert(0, jh_custom)
+                # Verificar si el usuario mencionó explícitamente el nombre exacto de alguna tabla en el prompt
+                norm_prompt_lower = remove_accents((prompt or "").lower())
+                explicitly_named_tables = set()
+                if schema_chunks:
+                    for ch in schema_chunks:
+                        t_raw = str((ch.metadata or {}).get("table_name", "")).strip()
+                        if t_raw and len(t_raw) >= 3:
+                            t_norm = remove_accents(t_raw.lower())
+                            if re.search(rf"\b{re.escape(t_norm)}\b", norm_prompt_lower):
+                                explicitly_named_tables.add(t_raw.lower())
 
-                joins_summary = (
-                    "\nRELACIONES Y JOINS APRENDIDOS EN EL GRAFO VECTORIAL:\n"
-                    + "\n".join([f"- {j}" for j in learned_joins[:12]])
-                    if learned_joins else ""
-                )
+                # Si el usuario mencionó explícitamente una sola tabla unívoca, no hay ambigüedad
+                if len(explicitly_named_tables) == 1:
+                    is_ambiguous = False
+                elif schema_chunks and len(schema_chunks) >= 1:
+                    top_chunk = schema_chunks[0]
+                    top_score = getattr(top_chunk, "similarity_score", 0.0) or 0.0
 
-                rules_summary = (
-                    "\nREGLAS DE NEGOCIO, DICCIONARIO Y EJEMPLOS SQL ENSEÑADOS POR EL USUARIO (PRIORIDAD MÁXIMA):\n"
-                    + "\n".join([f"- {rc.chunk_text}" for rc in learned_rule_chunks])
-                    if learned_rule_chunks else ""
-                )
+                    # 1. Confianza general baja (< 0.65) si no hay coincidencia léxica fuerte
+                    if top_score < 0.65 and len(schema_chunks) >= 2 and not explicitly_named_tables:
+                        is_ambiguous = True
+                        ambiguity_reason = "low_retrieval_confidence"
 
-                schema_context = "\n\n".join([c.chunk_text for c in schema_chunks]) if schema_chunks else (
-                    "Tabla: orders (id, customer_id, order_code, status, created_at)\n"
-                    "Tabla: customers (id, name, email)\n"
-                    "Tabla: products (id, sku, name, stock)"
-                )
+                    # 2. Empate técnico entre los 2 mejores candidatos (delta <= 0.04)
+                    elif len(schema_chunks) >= 2 and not explicitly_named_tables:
+                        second_chunk = schema_chunks[1]
+                        second_score = getattr(second_chunk, "similarity_score", 0.0) or 0.0
+                        delta = abs(top_score - second_score)
+                        
+                        t1 = str((top_chunk.metadata or {}).get("table_name", "")).strip()
+                        t2 = str((second_chunk.metadata or {}).get("table_name", "")).strip()
 
-                sql_prompt = (
-                    f"Eres un experto en SQL para {engine_title} conectado a la base de datos `{db_name}` ({conn_label}). "
-                    f"Escribe ÚNICAMENTE una consulta SQL SELECT válida para {engine_title} "
-                    f"que responda a la solicitud del usuario, sin explicaciones ni markdown.\n"
-                    f"ESQUEMAS DE TABLAS Y RELACIONES VECTORIZADOS DISPONIBLES EN `{db_name}`:\n{schema_context}{joins_summary}{rules_summary}\n\n"
-                    f"REGLAS OBLIGATORIAS DE ANÁLISIS RELACIONAL Y GRÁFICOS:\n"
-                    f"- Usa únicamente las tablas y columnas listadas en los esquemas.\n"
-                    f"- SOPORTE MULTI-ESQUEMA: Si la tabla contiene prefijo de esquema (ej: `produccion.ordenes`, `inventario.items`, `hop.registro`), SIEMPRE califica el nombre completo en `FROM` y `JOIN` con su esquema exacto (ej. `FROM produccion.ordenes`). Para tablas del esquema `public`, puedes usar `public.tabla` o `tabla`.\n"
-                    f"- APLICA ESTRICTAMENTE las REGLAS DE NEGOCIO, DICCIONARIO Y EJEMPLOS SQL ENSEÑADOS POR EL USUARIO si aparecen arriba.\n"
-                    f"- REGLA DE ORO DE RELACIONES (`JOIN`): Cuando una tabla tenga columnas de relación como `id_empresa`, `empresa_id`, `current_company_id`, `id_cliente`, `id_rollo`, `id_orden`, etc., ese ID por sí solo NO dice el nombre real. SIEMPRE realiza el `INNER JOIN` o `LEFT JOIN` hacia la tabla relacionada (por ejemplo `JOIN empresa ON usuario.id_empresa = empresa.id` o `JOIN companies ON users.current_company_id = companies.id`) e incluye en el `SELECT` las columnas descriptivas reales de la tabla maestra con un alias claro (ej. `companies.name AS empresa_nombre`).\n"
-                    f"- Si el usuario menciona dos o más tablas o entidades vinculadas/relacionadas, realiza el `JOIN` correspondiente e incluye en el `SELECT` las columnas descriptivas (nombres, estados, tipos, fechas) y numéricas (cantidades, pesos, totales) de ambas tablas para poder analizarlas y graficarlas con datos exactos.\n"
-                    f"- Si el usuario pide un gráfico o análisis sin especificar una sola columna, selecciona múltiples columnas relevantes de las tablas involucradas (en lugar de un simple `COUNT(*)` de 1 sola fila) para que el usuario pueda elegir con qué campos construir su gráfico.\n"
-                    f"- Si el usuario pregunta si tienes conocimiento de una tabla o qué datos contiene, genera una consulta SELECT sencilla como `SELECT * FROM <tabla> LIMIT 20;`.\n"
-                    f"- Respeta estrictamente la sintaxis de {engine_title}.\n\n"
-                    f"SOLICITUD: {prompt}\n"
-                    f"CONSULTA SQL:"
-                )
-                raw_sql = await self.ollama.generate_completion(prompt=sql_prompt)
-                is_valid, safe_sql, error_msg = self.guardrail.validate_and_sanitize(raw_sql, dialect=sql_dialect)
+                        if delta <= 0.04 and t1 and t2 and t1.lower() != t2.lower():
+                            is_ambiguous = True
+                            ambiguity_reason = "ambiguous_candidates"
 
-                if not is_valid:
-                    message_text = f"No pude formular una consulta segura para obtener esos datos: {error_msg}"
-                else:
-                    generated_sql = safe_sql
+                    if is_ambiguous:
+                        seen_opts = set()
+                        for ch in schema_chunks[:3]:
+                            t_n = str((ch.metadata or {}).get("table_name", "")).strip()
+                            t_desc = str((ch.metadata or {}).get("description") or (ch.metadata or {}).get("table_comment") or f"Tabla {t_n}")
+                            if t_n and t_n.lower() not in seen_opts:
+                                seen_opts.add(t_n.lower())
+                                options_list.append({
+                                    "id": t_n,
+                                    "label": t_n,
+                                    "description": t_desc[:120]
+                                })
+
+                # Si es ambiguo y tenemos al menos 2 opciones reales, emitir aclaración en vez de generar SQL
+                if is_ambiguous and len(options_list) >= 2:
+                    resilience_metrics.inc_clarifications_requested()
+                    clarification_payload = {
+                        "type": "clarification_request",
+                        "question": "Para darte un resultado exacto, ¿a cuál de las siguientes tablas te refieres?",
+                        "extracted_term": prompt[:60],
+                        "options": options_list,
+                        "original_prompt": prompt
+                    }
+
+                    # Registrar término en la cola de términos no entendidos
                     try:
-                        rows = await db_adapter.execute_query(safe_sql)
+                        uqt_repo = UnresolvedQueryTermRepository(self.session)
+                        conn_u = uuid.UUID(target_conn_id) if target_conn_id else None
+                        await uqt_repo.create_term(
+                            session_id=s_id,
+                            user_id=user_id,
+                            prompt=prompt,
+                            extracted_term=prompt[:60],
+                            failure_reason=ambiguity_reason or "ambiguous_candidates",
+                            connection_id=conn_u,
+                            candidate_tables=options_list
+                        )
+                    except Exception as uqt_err:
+                        pass
+
+                    options_md = "\n".join([f"- **`{opt['label']}`**: {opt['description']}" for opt in options_list])
+                    message_text = (
+                        f"Para responderte con total precisión, por favor aclárame a cuál de estas entidades te refieres:\n\n"
+                        f"{options_md}\n\n"
+                        f"*(Puedes hacer clic en una de las opciones interactivas que aparecen a continuación para continuar automáticamente)*"
+                    )
+                else:
+                    # 2. Recuperar reglas de negocio, relaciones manuales, fórmulas y ejemplos SQL aprendidos del usuario
+                    learned_rule_chunks = await self.vector_repo.search_learned_rules(
+                        query_embedding=query_vec,
+                        prompt_text=prompt,
+                        top_k=5,
+                        connection_id=target_conn_id
+                    )
+
+                    # 2.1 Recuperación de directivas aprendidas dinámicamente si el feature flag está activo
+                    dynamic_rules: List[Dict[str, Any]] = []
+                    dynamic_rules_applied: List[Dict[str, Any]] = []
+                    dynamic_rules_block = ""
+                    if self.settings.enable_dynamic_knowledge_injection:
+                        try:
+                            # Vectorizar usando el prefijo de búsqueda para queries
+                            query_search_vec = await self.ollama.generate_embedding(f"search_query: {prompt}")
+                            dynamic_rules = await self.vector_repo.search_dynamic_knowledge_rules(
+                                query_embedding=query_search_vec,
+                                user_id=user_id,
+                                connection_id=target_conn_id,
+                                top_k=self.settings.knowledge_top_k,
+                                similarity_threshold=self.settings.knowledge_similarity_threshold
+                            )
+                            if dynamic_rules:
+                                lines = []
+                                for dr in dynamic_rules:
+                                    dynamic_rules_applied.append({"id": dr["id"], "title": dr["title"]})
+                                    lines.append(f"- Regla para `{dr['target_entity']}` (`{dr['target_column']}`): {dr['prescriptive_condition']}")
+                                dynamic_rules_block = (
+                                    "\n<<<DIRECTIVAS_APRENDIDAS>>>\n"
+                                    + "\n".join(lines)
+                                    + "\n<<<FIN_DIRECTIVAS>>>\n"
+                                )
+                                rules_applied = dynamic_rules_applied
+                        except Exception as dyn_err:
+                            logger.warning(f"Error recuperando directivas dinámicas: {str(dyn_err)}")
+
+                    # Extraer pistas explícitas de JOIN aprendidas en los metadatos vectoriales
+                    learned_joins: List[str] = []
+                    for ch in schema_chunks:
+                        for jh in (ch.metadata or {}).get("join_hints", []) or []:
+                            if jh not in learned_joins:
+                                learned_joins.append(jh)
+                    for r_ch in learned_rule_chunks:
+                        jh_custom = (r_ch.metadata or {}).get("join_hint")
+                        if jh_custom and jh_custom not in learned_joins:
+                            learned_joins.insert(0, jh_custom)
+
+                    joins_summary = (
+                        "\nRELACIONES Y JOINS APRENDIDOS EN EL GRAFO VECTORIAL:\n"
+                        + "\n".join([f"- {j}" for j in learned_joins[:12]])
+                        if learned_joins else ""
+                    )
+
+                    rules_summary = (
+                        "\nREGLAS DE NEGOCIO, DICCIONARIO Y EJEMPLOS SQL ENSEÑADOS POR EL USUARIO (PRIORIDAD MÁXIMA):\n"
+                        + "\n".join([f"- {rc.chunk_text}" for rc in learned_rule_chunks])
+                        if learned_rule_chunks else ""
+                    )
+
+                    schema_context = "\n\n".join([c.chunk_text for c in schema_chunks]) if schema_chunks else (
+                        "Tabla: orders (id, customer_id, order_code, status, created_at)\n"
+                        "Tabla: customers (id, name, email)\n"
+                        "Tabla: products (id, sku, name, stock)"
+                    )
+
+                    sql_prompt = (
+                        f"Eres un experto en SQL para {engine_title} conectado a la base de datos `{db_name}` ({conn_label}). "
+                        f"Escribe ÚNICAMENTE una consulta SQL SELECT válida para {engine_title} "
+                        f"que responda a la solicitud del usuario, sin explicaciones ni markdown.\n"
+                        f"ESQUEMAS DE TABLAS Y RELACIONES VECTORIZADOS DISPONIBLES EN `{db_name}`:\n{schema_context}{joins_summary}{rules_summary}{dynamic_rules_block}\n\n"
+                        f"REGLAS OBLIGATORIAS DE ANÁLISIS RELACIONAL Y GRÁFICOS:\n"
+                        f"- Usa únicamente las tablas y columnas listadas en los esquemas.\n"
+                        f"- SOPORTE MULTI-ESQUEMA: Si la tabla contiene prefijo de esquema (ej: `produccion.ordenes`, `inventario.items`, `hop.registro`), SIEMPRE califica el nombre completo en `FROM` y `JOIN` con su esquema exacto (ej. `FROM produccion.ordenes`). Para tablas del esquema `public`, puedes usar `public.tabla` o `tabla`.\n"
+                        f"- APLICA ESTRICTAMENTE las REGLAS DE NEGOCIO, DICCIONARIO Y EJEMPLOS SQL ENSEÑADOS POR EL USUARIO si aparecen arriba.\n"
+                        f"- SI EXISTEN <<<DIRECTIVAS_APRENDIDAS>>>, APLÍCALAS DE FORMA OBLIGATORIA Y PRIORITARIA en las cláusulas WHERE y filtros correspondientes.\n"
+                        f"- REGLA DE ORO DE RELACIONES (`JOIN`): Cuando una tabla tenga columnas de relación como `id_empresa`, `empresa_id`, `current_company_id`, `id_cliente`, `id_rollo`, `id_orden`, etc., ese ID por sí solo NO dice el nombre real. SIEMPRE realiza el `INNER JOIN` o `LEFT JOIN` hacia la tabla relacionada (por ejemplo `JOIN empresa ON usuario.id_empresa = empresa.id` o `JOIN companies ON users.current_company_id = companies.id`) e incluye en el `SELECT` las columnas descriptivas reales de la tabla maestra con un alias claro (ej. `companies.name AS empresa_nombre`).\n"
+                        f"- Si el usuario menciona dos o más tablas o entidades vinculadas/relacionadas, realiza el `JOIN` correspondiente e incluye en el `SELECT` las columnas descriptivas (nombres, estados, tipos, fechas) y numéricas (cantidades, pesos, totales) de ambas tablas para poder analizarlas y graficarlas con datos exactos.\n"
+                        f"- Si el usuario pide un gráfico o análisis sin especificar una sola columna, selecciona múltiples columnas relevantes de las tablas involucradas (en lugar de un simple `COUNT(*)` de 1 sola fila) para que el usuario pueda elegir con qué campos construir su gráfico.\n"
+                        f"- Si el usuario pregunta si tienes conocimiento de una tabla o qué datos contiene, genera una consulta SELECT sencilla como `SELECT * FROM <tabla> LIMIT 20;`.\n"
+                        f"- Respeta estrictamente la sintaxis de {engine_title}.\n\n"
+                        f"SOLICITUD: {prompt}\n"
+                        f"CONSULTA SQL:"
+                    )
+                    raw_sql = await self.ollama.generate_completion(
+                        prompt=sql_prompt,
+                        max_tokens=300,
+                        temperature=0.0
+                    )
+                    # Validar SQL inicial o pasar por reparación si el guardrail o el modelo fallaron
+                    repair_agent = SqlRepairAgent(ollama=self.ollama, guardrail=self.guardrail)
+                    is_valid, safe_sql, error_msg = self.guardrail.validate_and_sanitize(raw_sql, dialect=sql_dialect)
+
+                    sql_to_execute = safe_sql if is_valid else None
+                    execution_success = False
+                    last_error_details = error_msg if not is_valid else None
+                    attempts_done = 0
+                    max_repair_attempts = 2
+
+                    # Bucle de Auto-Reparación (Self-Healing Loop)
+                    while attempts_done <= max_repair_attempts:
+                        if sql_to_execute:
+                            try:
+                                rows = await db_adapter.execute_query(sql_to_execute)
+                                execution_success = True
+                                generated_sql = sql_to_execute
+                                if attempts_done > 0:
+                                    resilience_metrics.inc_repair_success()
+                                break
+                            except Exception as exec_err:
+                                last_error_details = str(exec_err)
+                                attempts_done += 1
+                                if attempts_done <= max_repair_attempts:
+                                    resilience_metrics.inc_repair_attempts()
+                                    rep_ok, repaired_sql, rep_err = await repair_agent.attempt_repair(
+                                        original_prompt=prompt,
+                                        failed_sql=sql_to_execute,
+                                        error_details=last_error_details,
+                                        schema_context=schema_context,
+                                        dialect=sql_dialect,
+                                        engine_title=engine_title
+                                    )
+                                    if rep_ok and repaired_sql:
+                                        sql_to_execute = repaired_sql
+                                    else:
+                                        last_error_details = rep_err or "Guardrail rechazó la corrección"
+                                        sql_to_execute = None
+                        else:
+                            attempts_done += 1
+                            if attempts_done <= max_repair_attempts:
+                                resilience_metrics.inc_repair_attempts()
+                                rep_ok, repaired_sql, rep_err = await repair_agent.attempt_repair(
+                                    original_prompt=prompt,
+                                    failed_sql=raw_sql,
+                                    error_details=last_error_details or "Sintaxis o instrucción no válida",
+                                    schema_context=schema_context,
+                                    dialect=sql_dialect,
+                                    engine_title=engine_title
+                                )
+                                if rep_ok and repaired_sql:
+                                    sql_to_execute = repaired_sql
+                                else:
+                                    last_error_details = rep_err or "No se pudo generar un SQL seguro"
+
+                    if not execution_success:
+                        resilience_metrics.inc_repair_exhausted()
+                        # Registrar en cola de términos no entendidos
+                        try:
+                            uqt_repo = UnresolvedQueryTermRepository(self.session)
+                            conn_u = uuid.UUID(target_conn_id) if target_conn_id else None
+                            await uqt_repo.create_term(
+                                session_id=s_id,
+                                user_id=user_id,
+                                prompt=prompt,
+                                extracted_term=prompt[:60],
+                                failure_reason="sql_repair_exhausted",
+                                connection_id=conn_u,
+                                error_message=last_error_details
+                            )
+                        except Exception:
+                            pass
+
+                        message_text = (
+                            f"He analizado los esquemas de la base de datos `{db_name}`, pero no pude generar una consulta "
+                            f"exacta para responder a tu solicitud sin ambigüedades.\n\n"
+                            f"💡 **Sugerencia**: Intenta especificar con mayor claridad el nombre de la tabla o columnas que deseas consultar "
+                            f"(ejemplo: *\"muéstrame los primeros 10 registros de la tabla {schema_chunks[0].metadata.get('table_name', 'principal') if schema_chunks else 'principal'}\"*)."
+                        )
+                    else:
                         row_count = len(rows)
 
                         if row_count > 0:
@@ -572,13 +887,14 @@ class AskChatUseCase:
                             dataset_model = QueryDatasetModel(
                                 dataset_id=dataset_id,
                                 session_id=s_id,
-                                sql_executed=safe_sql,
+                                sql_executed=generated_sql,
                                 columns=columns_list,
                                 rows=rows,
                                 row_count=row_count,
                                 expires_at=datetime.now(timezone.utc) + timedelta(hours=self.settings.dataset_cache_ttl_hours)
                             )
                             self.session.add(dataset_model)
+                            await self.session.commit()
 
                             # Analizar columnas y determinar si requiere selección guiada de campos (Opción A)
                             chart_config = self.analyze_columns_for_chart(
@@ -616,22 +932,34 @@ class AskChatUseCase:
                             synthesis_prompt = (
                                 f"Se ejecutó una consulta en la base de datos {engine_title} `{db_name}` ({conn_label}).\n"
                                 f"Pregunta del usuario: {prompt}\n"
-                                f"Consulta SQL ejecutada: {safe_sql}\n"
+                                f"Consulta SQL ejecutada: {generated_sql}\n"
                                 f"Total registros encontrados: {row_count}.\n"
                                 f"Muestra de datos (primeros 5): {sample_preview}\n\n"
-                                f"Redacta una respuesta humanizada, profesional, clara y en español usando formato Markdown "
-                                f"(encabezados `###`, listas con viñetas `-`, **negritas** para cifras clave y código en línea `tabla`/`columna`), "
-                                f"resumiendo los hallazgos principales de forma ejecutiva.{chart_instruction}"
+                                f"Redacta una respuesta concisa, ejecutiva y clara en español usando formato Markdown "
+                                f"(máximo 2 párrafos cortos, destacando los puntos clave).{chart_instruction}"
                             )
-                            message_text = await self.ollama.generate_completion(prompt=synthesis_prompt)
+                            try:
+                                message_text = await self.ollama.generate_completion(
+                                    prompt=synthesis_prompt,
+                                    max_tokens=220,
+                                    temperature=0.2
+                                )
+                            except Exception as synth_err:
+                                message_text = (
+                                    f"Se consultó exitosamente la base de datos `{db_name}` y se recuperaron **{row_count} registros** "
+                                    f"mediante la consulta SQL ejecutada.\n\n"
+                                    f"Puedes explorar los datos completos en la tabla interactiva de abajo o exportarlos directamente a Excel (.xlsx)."
+                                )
                         else:
                             message_text = f"Se consultó la base de datos `{db_name}` ({engine_title}) pero no se encontraron registros que coincidan con los criterios solicitados."
-                    except Exception as e:
-                        message_text = f"Ocurrió un inconveniente al consultar la base de datos `{db_name}`: {str(e)}"
 
         latency = int((time.time() - start_time) * 1000)
 
-        # Guardar mensaje en el historial
+        # Guardar mensaje en el historial con metadata_ incluyendo rules_applied
+        msg_metadata = {}
+        if rules_applied:
+            msg_metadata["rules_applied"] = rules_applied
+
         msg_model = ChatMessageModel(
             session_id=s_id,
             role="assistant",
@@ -639,13 +967,18 @@ class AskChatUseCase:
             intent=intent,
             generated_sql=generated_sql,
             dataset_id=dataset_id,
-            latency_ms=latency
+            latency_ms=latency,
+            metadata_=msg_metadata
         )
         self.session.add(msg_model)
         await self.session.commit()
 
         return {
             "session_id": str(s_id),
+            "message_id": str(msg_model.id),
+            "user_message_id": user_msg_id,
+            "previous_assistant_message": prev_asst_content,
+            "previous_sql": prev_asst_sql,
             "message": message_text,
             "intent": intent,
             "has_tabular_data": has_tabular_data,
@@ -655,7 +988,9 @@ class AskChatUseCase:
             "columns": columns_list if has_tabular_data else None,
             "preview_rows": preview_rows if has_tabular_data else None,
             "chart_config": chart_config if has_tabular_data else None,
-            "latency_ms": latency
+            "clarification": clarification_payload,
+            "latency_ms": latency,
+            "rules_applied": rules_applied
         }
 
     async def list_user_sessions(self, user_id: str) -> List[Dict[str, Any]]:
@@ -711,6 +1046,8 @@ class AskChatUseCase:
             columns = None
             preview_rows = None
             chart_config = None
+            msg_meta = m.metadata_ or {}
+            rules_applied = msg_meta.get("rules_applied", [])
 
             if m.dataset_id:
                 ds = await self.session.get(QueryDatasetModel, m.dataset_id)
@@ -740,6 +1077,8 @@ class AskChatUseCase:
                 "preview_rows": preview_rows,
                 "chart_config": chart_config,
                 "latency_ms": m.latency_ms,
+                "metadata": msg_meta,
+                "rules_applied": rules_applied,
                 "created_at": m.created_at.isoformat() if m.created_at else ""
             })
 

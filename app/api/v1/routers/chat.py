@@ -1,5 +1,6 @@
 """Endpoints para la conversación de chat y streaming en tiempo real (SSE)."""
 
+import asyncio
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -11,10 +12,39 @@ from app.api.v1.schemas.chat import (
     ChatSessionSummarySchema,
 )
 from app.api.v1.streaming import format_sse
-from app.infrastructure.database.postgres_adapter import get_db_session
+from app.infrastructure.database.postgres_adapter import get_db_session, AsyncSessionLocal as async_session_factory
+from app.infrastructure.llm.inference_concurrency_manager import InferenceConcurrencyManager
 from app.use_cases.ask_chat import AskChatUseCase
+from app.use_cases.detect_dialogue_correction import DetectDialogueCorrectionUseCase
 
 router = APIRouter(prefix="/chat", tags=["Chat & Text-to-SQL"])
+
+
+async def _run_dialogue_detector_background(
+    user_id: str,
+    session_id: str,
+    message_id: str,
+    connection_id: Optional[str],
+    user_message: str,
+    previous_assistant_message: Optional[str],
+    previous_sql: Optional[str]
+):
+    """Ejecuta el detector en background abriendo su propia AsyncSession independiente."""
+    try:
+        async with async_session_factory() as bg_session:
+            use_case = DetectDialogueCorrectionUseCase(bg_session)
+            await use_case.execute(
+                user_id=user_id,
+                session_id=session_id,
+                message_id=message_id,
+                connection_id=connection_id,
+                user_message=user_message,
+                previous_assistant_message=previous_assistant_message,
+                previous_sql=previous_sql
+            )
+    except Exception as e:
+        import logging
+        logging.getLogger("chat_stream").error(f"Error en detector background: {str(e)}")
 
 
 @router.post(
@@ -35,7 +65,8 @@ async def send_chat_message(
             user_id=payload.user_id or "user",
             connection_id=payload.connection_id,
             user_role=payload.user_role or "user",
-            user_permissions=payload.user_permissions or []
+            user_permissions=payload.user_permissions or [],
+            attachment_ids=payload.attachment_ids or []
         )
         return ChatResponse(**result)
     except Exception as e:
@@ -53,19 +84,45 @@ async def stream_chat_message(
     payload: ChatRequest,
     session: AsyncSession = Depends(get_db_session)
 ):
-    """Transmite la respuesta token a token usando Server-Sent Events (SSE)."""
+    """Transmite la respuesta token a token usando Server-Sent Events (SSE) con soporte de Heartbeat y Reintento."""
     async def sse_generator():
         use_case = AskChatUseCase(session)
-        # Emitir sesión iniciada
-        yield format_sse("session", {"status": "processing"})
+        concurrency_manager = InferenceConcurrencyManager()
+        concurrency_manager.register_user_query_start(payload.session_id)
 
         try:
-            result = await use_case.execute_sync(
-                prompt=payload.prompt,
-                session_id=payload.session_id,
-                user_id=payload.user_id or "user",
-                connection_id=payload.connection_id
+            # Tarea asíncrona de inferencia y persistencia
+            task = asyncio.create_task(
+                use_case.execute_sync(
+                    prompt=payload.prompt,
+                    session_id=payload.session_id,
+                    user_id=payload.user_id or "user",
+                    connection_id=payload.connection_id,
+                    user_role=payload.user_role or "user",
+                    user_permissions=payload.user_permissions or [],
+                    retry_message_id=payload.retry_message_id,
+                    attachment_ids=payload.attachment_ids or []
+                )
             )
+
+            # Mientras la inferencia/SQL se procesa, emitir latidos periódicos cada 5 segundos
+            while not task.done():
+                done, _ = await asyncio.wait([task], timeout=5.0)
+                if not done:
+                    # Comentario SSE para mantener viva la conexión HTTP y reiniciar timers de inactividad
+                    yield ": ping\n\n"
+
+            result = await task
+
+            # Emitir evento oficial de sesión con el session_id real persistido en base de datos
+            yield format_sse("session", {
+                "status": "processing",
+                "session_id": result["session_id"]
+            })
+
+            # Si se generó una solicitud de aclaración interactiva (Feature 006)
+            if result.get("clarification"):
+                yield format_sse("clarification", result["clarification"])
 
             # Transmitir el mensaje en tokens para la animación
             tokens = result["message"].split(" ")
@@ -84,13 +141,40 @@ async def stream_chat_message(
                     "chart_config": result.get("chart_config")
                 })
 
-            # Emitir evento de finalización
-            yield format_sse("done", {
+            # Emitir evento de finalización (aditivo con rules_applied manteniendo session_id y latency_ms)
+            done_payload = {
                 "session_id": result["session_id"],
                 "latency_ms": result["latency_ms"]
-            })
+            }
+            if result.get("rules_applied"):
+                done_payload["rules_applied"] = result["rules_applied"]
+            else:
+                done_payload["rules_applied"] = []
+
+            yield format_sse("done", done_payload)
+
+            # Disparar detector de correcciones en background (no bloquea SSE)
+            bg_user_msg_id = result.get("user_message_id")
+            if bg_user_msg_id:
+                detector_task = asyncio.create_task(
+                    _run_dialogue_detector_background(
+                        user_id=str(payload.user_id or "user"),
+                        session_id=str(result["session_id"]),
+                        message_id=str(bg_user_msg_id),
+                        connection_id=payload.connection_id,
+                        user_message=payload.prompt,
+                        previous_assistant_message=result.get("prev_asst_content"),
+                        previous_sql=result.get("prev_asst_sql")
+                    )
+                )
+                concurrency_manager.register_background_detector(str(result["session_id"]), detector_task)
+                detector_task.add_done_callback(
+                    lambda _: concurrency_manager.unregister_background_detector(str(result["session_id"]))
+                )
         except Exception as e:
             yield format_sse("error", {"detail": str(e)})
+        finally:
+            concurrency_manager.register_user_query_end()
 
     return StreamingResponse(
         sse_generator(),

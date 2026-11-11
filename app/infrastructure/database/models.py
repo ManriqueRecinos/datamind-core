@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
+    BigInteger, Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -38,6 +38,22 @@ class KnowledgeVectorChunkModel(Base):
     chunk_text = Column(Text, nullable=False)
     embedding = Column(Vector(768), nullable=False)
     metadata_ = Column("metadata", JSONB, nullable=False, default=dict)
+    connection_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    status = Column(String(30), nullable=False, default="verified")
+    scope = Column(String(20), nullable=False, default="global")
+    user_id = Column(String(100), nullable=True, index=True)
+    target_entity = Column(String(100), nullable=True)
+    target_column = Column(String(100), nullable=True)
+    prescriptive_condition = Column(String(250), nullable=True)
+    trigger_signal = Column(String(50), nullable=False, default="manual_teach")
+    source_session_id = Column(UUID(as_uuid=True), nullable=True)
+    source_message_id = Column(UUID(as_uuid=True), nullable=True)
+    version = Column(Integer, nullable=False, default=1)
+    parent_rule_id = Column(UUID(as_uuid=True), nullable=True)
+    conflict_with_id = Column(UUID(as_uuid=True), nullable=True)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    proposed_global_at = Column(DateTime(timezone=True), nullable=True)
+    embedding_model = Column(String(50), nullable=False, default="nomic-embed-text")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     document = relationship("KnowledgeDocumentModel", back_populates="chunks")
@@ -51,6 +67,22 @@ class KnowledgeVectorChunkModel(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"}
         ),
     )
+
+
+class KnowledgeAuditLogModel(Base):
+    """Modelo inmutable para auditoría de candidatos y conocimiento."""
+    __tablename__ = "knowledge_audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    action = Column(String(50), nullable=False)
+    actor_id = Column(String(100), nullable=False, index=True)
+    actor_role = Column(String(50), nullable=False)
+    source_session_id = Column(UUID(as_uuid=True), nullable=True)
+    previous_state = Column(JSONB, nullable=True)
+    new_state = Column(JSONB, nullable=False)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class ChatSessionModel(Base):
@@ -78,6 +110,7 @@ class ChatMessageModel(Base):
     generated_sql = Column(Text, nullable=True)
     dataset_id = Column(String(64), nullable=True, index=True)
     latency_ms = Column(Integer, nullable=True)
+    metadata_ = Column("metadata", JSONB, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     session = relationship("ChatSessionModel", back_populates="messages")
@@ -118,3 +151,44 @@ class DatabaseConnectionModel(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc)
     )
+
+
+class ChatAttachmentModel(Base):
+    """Modelo para archivos adjuntos subidos al chat para analítica tabular local en CPU."""
+    __tablename__ = "chat_attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(100), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    original_name = Column(String(255), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    file_size_bytes = Column(BigInteger, nullable=False)
+    storage_path = Column(Text, nullable=False)
+    schema_preview = Column(JSONB, nullable=False, default=dict)
+    row_count = Column(Integer, nullable=True)
+    status = Column(String(30), nullable=False, default="ready")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    session = relationship("ChatSessionModel", backref="attachments")
+
+
+class UnresolvedQueryTermModel(Base):
+    """Modelo para registro de términos no entendidos, colisiones y fallos de reintento."""
+    __tablename__ = "unresolved_query_terms"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    connection_id = Column(UUID(as_uuid=True), ForeignKey("database_connections.id", ondelete="CASCADE"), nullable=True, index=True)
+    session_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    user_id = Column(String(100), nullable=False, index=True)
+    prompt = Column(Text, nullable=False)
+    extracted_term = Column(String(150), nullable=False)
+    failure_reason = Column(String(50), nullable=False, default="ambiguous_candidates")
+    candidate_tables = Column(JSONB, nullable=False, default=list)
+    error_message = Column(Text, nullable=True)
+    status = Column(String(30), nullable=False, default="pending", index=True)
+    resolved_target = Column(String(150), nullable=True)
+    resolved_by = Column(String(100), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+

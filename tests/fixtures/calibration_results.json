@@ -1,0 +1,378 @@
+{
+  "best_threshold": 0.65,
+  "best_f1": 0.4444444444444444,
+  "pos_avg": 0.625,
+  "neg_avg": 0.572595,
+  "metrics": [
+    {
+      "threshold": 0.65,
+      "precision": 0.8571,
+      "recall": 0.3,
+      "f1": 0.4444,
+      "fp": 1,
+      "fn": 14
+    },
+    {
+      "threshold": 0.67,
+      "precision": 1.0,
+      "recall": 0.25,
+      "f1": 0.4,
+      "fp": 0,
+      "fn": 15
+    },
+    {
+      "threshold": 0.69,
+      "precision": 1.0,
+      "recall": 0.1,
+      "f1": 0.1818,
+      "fp": 0,
+      "fn": 18
+    },
+    {
+      "threshold": 0.71,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    },
+    {
+      "threshold": 0.73,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    },
+    {
+      "threshold": 0.75,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    },
+    {
+      "threshold": 0.77,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    },
+    {
+      "threshold": 0.79,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    },
+    {
+      "threshold": 0.81,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    },
+    {
+      "threshold": 0.83,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    },
+    {
+      "threshold": 0.85,
+      "precision": 1.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "fp": 0,
+      "fn": 20
+    }
+  ],
+  "scores": [
+    {
+      "id": "pair_01",
+      "query": "¿Cuáles son las facturas activas de este mes?",
+      "document": "Para la tabla factura_lineas, la columna estado debe cumplir: estado = 'A'.",
+      "is_relevant": true,
+      "similarity": 0.6628
+    },
+    {
+      "id": "pair_02",
+      "query": "Muestra el total facturado excluyendo facturas anuladas o borrador",
+      "document": "Para la tabla factura_lineas, la columna estado debe cumplir: estado = 'A'.",
+      "is_relevant": true,
+      "similarity": 0.6261
+    },
+    {
+      "id": "pair_03",
+      "query": "Tiempo promedio de despacho de pedidos",
+      "document": "Para la tabla pedidos, la columna fecha_despacho debe cumplir: fecha_despacho IS NOT NULL.",
+      "is_relevant": true,
+      "similarity": 0.6917
+    },
+    {
+      "id": "pair_04",
+      "query": "Listado de pedidos enviados la semana pasada",
+      "document": "Para la tabla pedidos, la columna fecha_despacho debe cumplir: fecha_despacho IS NOT NULL.",
+      "is_relevant": true,
+      "similarity": 0.6172
+    },
+    {
+      "id": "pair_05",
+      "query": "Ventas agrupadas por clientes mayoristas",
+      "document": "Para la tabla clientes, la columna tipo_cliente debe cumplir: tipo_cliente = 'MAYORISTA'.",
+      "is_relevant": true,
+      "similarity": 0.6965
+    },
+    {
+      "id": "pair_06",
+      "query": "Dame los clientes de tipo distribuidor grande",
+      "document": "Para la tabla clientes, la columna tipo_cliente debe cumplir: tipo_cliente = 'MAYORISTA'.",
+      "is_relevant": true,
+      "similarity": 0.6896
+    },
+    {
+      "id": "pair_07",
+      "query": "Inventario de productos disponibles para la venta",
+      "document": "Para la tabla productos, la columna activo debe cumplir: activo = 1.",
+      "is_relevant": true,
+      "similarity": 0.6152
+    },
+    {
+      "id": "pair_08",
+      "query": "Catálogo de artículos vigentes en el sistema",
+      "document": "Para la tabla productos, la columna activo debe cumplir: activo = 1.",
+      "is_relevant": true,
+      "similarity": 0.612
+    },
+    {
+      "id": "pair_09",
+      "query": "Órdenes de compra autorizadas para pagar",
+      "document": "Para la tabla ordenes_compra, la columna estado debe cumplir: estado = 'APROBADO'.",
+      "is_relevant": true,
+      "similarity": 0.6726
+    },
+    {
+      "id": "pair_10",
+      "query": "Compras que ya tienen visto bueno de gerencia",
+      "document": "Para la tabla ordenes_compra, la columna estado debe cumplir: estado = 'APROBADO'.",
+      "is_relevant": true,
+      "similarity": 0.6243
+    },
+    {
+      "id": "pair_11",
+      "query": "Stock del almacén central de materias primas",
+      "document": "Para la tabla inventario, la columna almacen_id debe cumplir: almacen_id = 10.",
+      "is_relevant": true,
+      "similarity": 0.643
+    },
+    {
+      "id": "pair_12",
+      "query": "Existencias en bodega principal",
+      "document": "Para la tabla inventario, la columna almacen_id debe cumplir: almacen_id = 10.",
+      "is_relevant": true,
+      "similarity": 0.5428
+    },
+    {
+      "id": "pair_13",
+      "query": "Rollos de tela que superaron el control de calidad",
+      "document": "Para la tabla rollos_inspeccion, la columna calidad debe cumplir: calidad = 'PRIMERA'.",
+      "is_relevant": true,
+      "similarity": 0.6801
+    },
+    {
+      "id": "pair_14",
+      "query": "Telas aprobadas listas para confección",
+      "document": "Para la tabla rollos_inspeccion, la columna calidad debe cumplir: calidad = 'PRIMERA'.",
+      "is_relevant": true,
+      "similarity": 0.588
+    },
+    {
+      "id": "pair_15",
+      "query": "Empleados de la planta de tintorería",
+      "document": "Para la tabla empleados, la columna departamento_id debe cumplir: departamento_id = 4.",
+      "is_relevant": true,
+      "similarity": 0.554
+    },
+    {
+      "id": "pair_16",
+      "query": "Personal activo en el área de tintes y acabados",
+      "document": "Para la tabla empleados, la columna departamento_id debe cumplir: departamento_id = 4.",
+      "is_relevant": true,
+      "similarity": 0.5755
+    },
+    {
+      "id": "pair_17",
+      "query": "Envíos internacionales entregados al cliente",
+      "document": "Para la tabla despachos, la columna estado_envio debe cumplir: estado_envio = 'ENTREGADO'.",
+      "is_relevant": true,
+      "similarity": 0.6426
+    },
+    {
+      "id": "pair_18",
+      "query": "Cargas que ya llegaron a su destino final",
+      "document": "Para la tabla despachos, la columna estado_envio debe cumplir: estado_envio = 'ENTREGADO'.",
+      "is_relevant": true,
+      "similarity": 0.6077
+    },
+    {
+      "id": "pair_19",
+      "query": "Lotes de teñido completados en la máquina 2",
+      "document": "Para la tabla ordenes_produccion, la columna estado_proceso debe cumplir: estado_proceso = 'TERMINADO'.",
+      "is_relevant": true,
+      "similarity": 0.5258
+    },
+    {
+      "id": "pair_20",
+      "query": "Producción finalizada en planta textil",
+      "document": "Para la tabla ordenes_produccion, la columna estado_proceso debe cumplir: estado_proceso = 'TERMINADO'.",
+      "is_relevant": true,
+      "similarity": 0.6325
+    },
+    {
+      "id": "pair_neg_21",
+      "query": "¿Cómo solicito mis vacaciones en el portal?",
+      "document": "Para la tabla factura_lineas, la columna estado debe cumplir: estado = 'A'.",
+      "is_relevant": false,
+      "similarity": 0.5371
+    },
+    {
+      "id": "pair_neg_22",
+      "query": "Buenos días, ¿me puedes decir la hora actual?",
+      "document": "Para la tabla pedidos, la columna fecha_despacho debe cumplir: fecha_despacho IS NOT NULL.",
+      "is_relevant": false,
+      "similarity": 0.6315
+    },
+    {
+      "id": "pair_neg_23",
+      "query": "Muchas gracias por tu ayuda, muy amable.",
+      "document": "Para la tabla clientes, la columna tipo_cliente debe cumplir: tipo_cliente = 'MAYORISTA'.",
+      "is_relevant": false,
+      "similarity": 0.5674
+    },
+    {
+      "id": "pair_neg_24",
+      "query": "Muéstrame un gráfico de barras de las ciudades de los empleados",
+      "document": "Para la tabla productos, la columna activo debe cumplir: activo = 1.",
+      "is_relevant": false,
+      "similarity": 0.5781
+    },
+    {
+      "id": "pair_neg_25",
+      "query": "Exporta la tabla anterior a formato Excel por favor",
+      "document": "Para la tabla ordenes_compra, la columna estado debe cumplir: estado = 'APROBADO'.",
+      "is_relevant": false,
+      "similarity": 0.6676
+    },
+    {
+      "id": "pair_neg_26",
+      "query": "¿Qué significa la sigla KPI en la empresa?",
+      "document": "Para la tabla inventario, la columna almacen_id debe cumplir: almacen_id = 10.",
+      "is_relevant": false,
+      "similarity": 0.5389
+    },
+    {
+      "id": "pair_neg_27",
+      "query": "Quiero saber el cumpleaños del gerente de operaciones",
+      "document": "Para la tabla rollos_inspeccion, la columna calidad debe cumplir: calidad = 'PRIMERA'.",
+      "is_relevant": false,
+      "similarity": 0.6095
+    },
+    {
+      "id": "pair_neg_28",
+      "query": "Precio del dólar hoy en el mercado bancario",
+      "document": "Para la tabla empleados, la columna departamento_id debe cumplir: departamento_id = 4.",
+      "is_relevant": false,
+      "similarity": 0.523
+    },
+    {
+      "id": "pair_neg_29",
+      "query": "Reinicia la conversación y olvida lo que hablamos",
+      "document": "Para la tabla despachos, la columna estado_envio debe cumplir: estado_envio = 'ENTREGADO'.",
+      "is_relevant": false,
+      "similarity": 0.5873
+    },
+    {
+      "id": "pair_neg_30",
+      "query": "¿Cuántas impresoras hay en la sala de juntas?",
+      "document": "Para la tabla ordenes_produccion, la columna estado_proceso debe cumplir: estado_proceso = 'TERMINADO'.",
+      "is_relevant": false,
+      "similarity": 0.6054
+    },
+    {
+      "id": "pair_neg_31",
+      "query": "Lista de proveedores de hilos y fibras",
+      "document": "Para la tabla factura_lineas, la columna estado debe cumplir: estado = 'A'.",
+      "is_relevant": false,
+      "similarity": 0.5733
+    },
+    {
+      "id": "pair_neg_32",
+      "query": "¿Quién es el encargado de compras corporativas?",
+      "document": "Para la tabla pedidos, la columna fecha_despacho debe cumplir: fecha_despacho IS NOT NULL.",
+      "is_relevant": false,
+      "similarity": 0.5469
+    },
+    {
+      "id": "pair_neg_33",
+      "query": "Calcula 25 multiplicado por 140",
+      "document": "Para la tabla clientes, la columna tipo_cliente debe cumplir: tipo_cliente = 'MAYORISTA'.",
+      "is_relevant": false,
+      "similarity": 0.5435
+    },
+    {
+      "id": "pair_neg_34",
+      "query": "¿Dónde queda la sede de Supertex en Medellín?",
+      "document": "Para la tabla productos, la columna activo debe cumplir: activo = 1.",
+      "is_relevant": false,
+      "similarity": 0.5129
+    },
+    {
+      "id": "pair_neg_35",
+      "query": "Reglamento interno de trabajo capítulo tercero",
+      "document": "Para la tabla ordenes_compra, la columna estado debe cumplir: estado = 'APROBADO'.",
+      "is_relevant": false,
+      "similarity": 0.6272
+    },
+    {
+      "id": "pair_neg_36",
+      "query": "¿Hay stock de agujas para las máquinas de coser?",
+      "document": "Para la tabla rollos_inspeccion, la columna calidad debe cumplir: calidad = 'PRIMERA'.",
+      "is_relevant": false,
+      "similarity": 0.5049
+    },
+    {
+      "id": "pair_neg_37",
+      "query": "Listado de vehículos de transporte asignados a ruta norte",
+      "document": "Para la tabla empleados, la columna departamento_id debe cumplir: departamento_id = 4.",
+      "is_relevant": false,
+      "similarity": 0.5229
+    },
+    {
+      "id": "pair_neg_38",
+      "query": "Genera una contraseña segura para mi usuario",
+      "document": "Para la tabla despachos, la columna estado_envio debe cumplir: estado_envio = 'ENTREGADO'.",
+      "is_relevant": false,
+      "similarity": 0.5894
+    },
+    {
+      "id": "pair_neg_39",
+      "query": "Manual de mantenimiento de calderas industriales",
+      "document": "Para la tabla factura_lineas, la columna estado debe cumplir: estado = 'A'.",
+      "is_relevant": false,
+      "similarity": 0.5501
+    },
+    {
+      "id": "pair_neg_40",
+      "query": "DROP TABLE usuarios; -- inyección sql maliciosa en chat",
+      "document": "Para la tabla ordenes_produccion, la columna estado_proceso debe cumplir: estado_proceso = 'TERMINADO'.",
+      "is_relevant": false,
+      "similarity": 0.635
+    }
+  ]
+}

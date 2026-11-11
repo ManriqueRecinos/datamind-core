@@ -12,6 +12,8 @@ class ChatRequest(BaseModel):
     user_role: Optional[str] = Field(default="user", description="Rol maestro del usuario (ej: super-admin, data-analyst)")
     user_permissions: Optional[List[str]] = Field(default_factory=list, description="Lista de slugs de permisos autorizados")
     connection_id: Optional[str] = Field(default=None, description="UUID de la conexión de BD seleccionada")
+    retry_message_id: Optional[str] = Field(default=None, description="UUID opcional de un mensaje de usuario previo a reintentar")
+    attachment_ids: Optional[List[str]] = Field(default_factory=list, description="UUIDs de archivos adjuntos cargados en la sesión")
 
 
 class ChatResponse(BaseModel):
@@ -53,6 +55,8 @@ class ChatMessageHistoryItemSchema(BaseModel):
     preview_rows: Optional[List[Dict[str, Any]]] = None
     chart_config: Optional[Dict[str, Any]] = None
     latency_ms: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    rules_applied: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     created_at: str
 
 

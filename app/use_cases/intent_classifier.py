@@ -66,6 +66,25 @@ SQL_TRIGGER_PATTERNS = [
     r"\bcliente[s]?\b",
     r"\beje\s+[xy]\b",
     r"\bagrup(ar|ado|ando)\b",
+    # Entidades y conceptos de maquinaria, partes y atributos
+    r"\bparte[s]?\s+de\s+maquina\b",
+    r"\bparte[s]?\s+maquina\b",
+    r"\btipo[s]?\s+parte\b",
+    r"\bmaquina[s]?\b",
+    r"\batributo[s]?\b",
+    r"\bvalor(es)?\b",
+    r"\bcompatib(le|ilidad)\b",
+    r"\bmodelo[s]?\b",
+    r"\bmarca[s]?\b",
+    r"\bcostura[s]?\b",
+    r"\bneedle\s+plate\b",
+    r"\bfeed\s+dog\b",
+    r"\bpresser\s+foot\b",
+    r"\bdetalle[s]?\b",
+    r"\binformacion\s+de\b",
+    r"\bque\s+tiene\b",
+    r"\bque\s+contiene\b",
+    r"\bdatos\s+de\b",
 ]
 
 CHART_TRIGGER_PATTERNS = [
@@ -258,17 +277,21 @@ class IntentClassifier:
         if cls.is_teaching_statement(prompt):
             return "teach_knowledge"
 
-        # 1. Comprobar si requiere datos cuantitativos de la BD (prioridad alta)
+        # 1. Comprobar si es explícitamente una pregunta de proceso / normativa / manual
+        if re.search(r"\b(politica|politicas|procedimiento|procedimientos|manual|manuales|guia|protocolo|norma|normativa)\b", normalized):
+            return "process_qa"
+
+        # 2. Comprobar si requiere datos cuantitativos de la BD (prioridad alta)
         for p in SQL_TRIGGER_PATTERNS:
             if re.search(p, normalized):
                 return "data_query"
 
-        # 2. Comprobar saludos o preguntas generales
+        # 3. Comprobar saludos o preguntas generales
         for p in GREETING_PATTERNS:
             if re.search(p, normalized):
                 return "general_chat"
 
-        # 3. Por defecto, asumir consulta de procesos / RAG
+        # 4. Por defecto, asumir consulta de procesos / RAG
         return "process_qa"
 
     @staticmethod

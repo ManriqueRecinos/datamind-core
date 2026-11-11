@@ -12,6 +12,7 @@ from app.api.v1.schemas.connections import (
 )
 from app.infrastructure.database.postgres_adapter import get_db_session
 from app.use_cases.manage_connections import ManageConnectionsUseCase
+from app.core.telemetry_resilience import resilience_metrics
 
 router = APIRouter(prefix="/connections", tags=["Database Connections & Schema Discovery"])
 
@@ -134,6 +135,26 @@ async def activate_connection(
 
 
 @router.get(
+    "/{connection_id}/schemas",
+    summary="Detectar y listar todos los esquemas de la conexión usando sus credenciales guardadas"
+)
+async def get_connection_schemas(
+    connection_id: str,
+    session: AsyncSession = Depends(get_db_session)
+) -> Dict[str, Any]:
+    try:
+        use_case = ManageConnectionsUseCase(session)
+        return await use_case.get_connection_schemas(connection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error al inspeccionar los esquemas de la base de datos: {str(e)}"
+        )
+
+
+@router.get(
     "/{connection_id}/tables",
     summary="Detectar y listar todas las tablas y columnas de la conexión"
 )
@@ -192,3 +213,13 @@ async def delete_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.get(
+    "/system/resilience-metrics",
+    summary="Obtener métricas de resiliencia, auto-reparación y aclaraciones"
+)
+async def get_resilience_metrics():
+    """Devuelve las métricas en tiempo real de reparaciones SQL y aclaraciones resueltas."""
+    return resilience_metrics.get_metrics()
+

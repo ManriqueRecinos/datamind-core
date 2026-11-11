@@ -75,3 +75,76 @@ class TrainKnowledgeRequest(BaseModel):
     target_column: Optional[str] = Field(default="id", description="Columna llave primaria destino")
     label_column: Optional[str] = Field(default=None, description="Columna con el nombre legible en la tabla maestra")
     sql_query: Optional[str] = Field(default=None, description="Consulta SELECT verificada cuando category=sql_example")
+
+
+class KnowledgeCandidateItem(BaseModel):
+    """Representación serializada de un candidato de conocimiento."""
+    id: str
+    title: str
+    content: str
+    knowledge_type: str
+    status: str
+    scope: str
+    user_id: Optional[str] = None
+    target_entity: Optional[str] = None
+    target_column: Optional[str] = None
+    prescriptive_condition: Optional[str] = None
+    trigger_signal: str
+    version: int
+    confirmed_at: Optional[str] = None
+    proposed_global_at: Optional[str] = None
+    conflict_with_id: Optional[str] = None
+    created_at: str
+
+
+class KnowledgeCandidatesResponse(BaseModel):
+    """Lista de candidatos de conocimiento y propuestas pendientes."""
+    total: int
+    candidates: List[KnowledgeCandidateItem]
+
+
+class PromoteCandidateRequest(BaseModel):
+    """Solicitud de un administrador para promover una regla a alcance global."""
+    edited_content: Optional[str] = Field(default=None, description="Contenido corregido o refinado opcional")
+    reason: Optional[str] = Field(default=None, description="Motivo o justificación de la promoción")
+
+
+class RejectCandidateRequest(BaseModel):
+    """Solicitud para descartar un candidato."""
+    reason: Optional[str] = Field(default=None, description="Motivo por el cual se descarta")
+
+
+class RollbackCandidateRequest(BaseModel):
+    """Solicitud para revertir o desactivar una regla."""
+    reason: Optional[str] = Field(default=None, description="Justificación de la reversión")
+
+
+class UnresolvedQueryTermItem(BaseModel):
+    """Elemento individual de la cola de términos no entendidos."""
+    id: str
+    connection_id: Optional[str] = None
+    session_id: str
+    user_id: str
+    prompt: str
+    extracted_term: str
+    failure_reason: str
+    candidate_tables: List[Dict[str, Any]] = Field(default_factory=list)
+    error_message: Optional[str] = None
+    status: str
+    resolved_target: Optional[str] = None
+    resolved_by: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str
+
+
+class UnresolvedTermsResponse(BaseModel):
+    """Respuesta paginada de términos no entendidos."""
+    total: int
+    items: List[UnresolvedQueryTermItem]
+
+
+class ResolveUnresolvedTermRequest(BaseModel):
+    """Solicitud para marcar un término como resuelto o descartado."""
+    resolved_target: str = Field(..., description="Tabla o sinónimo de destino resuelto (ej. inventario_partes)")
+    status: str = Field(default="resolved", description="Estado final: resolved o ignored")
+

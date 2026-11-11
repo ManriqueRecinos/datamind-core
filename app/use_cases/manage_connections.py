@@ -241,6 +241,34 @@ class ManageConnectionsUseCase:
             "vector_documents_removed": deleted_docs
         }
 
+    async def get_connection_schemas(self, connection_id: str) -> Dict[str, Any]:
+        """Obtiene la lista de todos los esquemas existentes y conteo de tablas usando las credenciales almacenadas."""
+        conn_uuid = uuid.UUID(str(connection_id))
+        conn_model = await self.session.get(DatabaseConnectionModel, conn_uuid)
+        if not conn_model:
+            raise ValueError(f"No se encontró la conexión con ID {connection_id}")
+
+        adapter = self._build_adapter(conn_model)
+        all_tables = await adapter.introspect_schema()
+
+        schemas_map: Dict[str, int] = {}
+        for t in all_tables:
+            s_name = t.get("schema_name") or ("public" if adapter.is_postgres else (conn_model.database_name or "default"))
+            schemas_map[s_name] = schemas_map.get(s_name, 0) + 1
+
+        schemas_detected = [
+            {"name": s, "tables_count": count}
+            for s, count in sorted(schemas_map.items(), key=lambda x: x[0].lower())
+        ]
+
+        return {
+            "connection_id": str(conn_uuid),
+            "database_name": conn_model.database_name,
+            "engine": conn_model.engine,
+            "schemas_detected": schemas_detected,
+            "selected_schemas": list(conn_model.selected_schemas or [])
+        }
+
     async def get_connection_tables(self, connection_id: str) -> Dict[str, Any]:
         """Introspecciona todas las tablas de una conexión y marca cuáles ya están vectorizadas."""
         conn_uuid = uuid.UUID(str(connection_id))

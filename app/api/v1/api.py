@@ -5,9 +5,11 @@ from app.api.v1.routers.chat import router as chat_router
 from app.api.v1.routers.connections import router as connections_router
 from app.api.v1.routers.export import router as export_router
 from app.api.v1.routers.knowledge import router as knowledge_router
+from app.api.v1.routers.attachments import router as attachments_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(chat_router)
 api_router.include_router(connections_router)
 api_router.include_router(knowledge_router)
 api_router.include_router(export_router)
+api_router.include_router(attachments_router)

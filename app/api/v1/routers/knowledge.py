@@ -1,7 +1,8 @@
 """Endpoints REST para la gestión del conocimiento, Centro de Entrenamiento IA y búsqueda vectorial en pgvector."""
 
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from typing import Optional, List
+import uuid
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.schemas.knowledge import (
@@ -13,10 +14,20 @@ from app.api.v1.schemas.knowledge import (
     SchemaSyncRequest,
     SchemaSyncResponse,
     TrainKnowledgeRequest,
+    KnowledgeCandidateItem,
+    KnowledgeCandidatesResponse,
+    PromoteCandidateRequest,
+    RejectCandidateRequest,
+    RollbackCandidateRequest,
+    UnresolvedQueryTermItem,
+    UnresolvedTermsResponse,
+    ResolveUnresolvedTermRequest,
 )
 from app.infrastructure.database.models import KnowledgeDocumentModel
 from app.infrastructure.database.postgres_adapter import get_db_session
 from app.infrastructure.database.vector_repository import VectorRepository
+from app.infrastructure.database.candidate_repository import CandidateRepository
+from app.infrastructure.database.repositories.unresolved_terms_repository import UnresolvedQueryTermRepository
 from app.infrastructure.llm.ollama_adapter import OllamaAdapter
 from app.infrastructure.llm.sql_guardrail import SQLGuardrail
 from app.use_cases.ingest_knowledge import IngestKnowledgeUseCase
@@ -267,3 +278,260 @@ async def sync_schema(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error durante la sincronización del esquema: {str(e)}"
         )
+
+
+# ==============================================================================
+# Endpoints de Ciclo de Vida de Candidatos de Conocimiento Implícito (Fase 1)
+# ==============================================================================
+
+@router.get(
+    "/candidates",
+    response_model=KnowledgeCandidatesResponse,
+    summary="Listar candidatos de conocimiento y propuestas pendientes"
+)
+async def list_candidates(
+    connection_id: Optional[str] = Query(default=None),
+    scope: Optional[str] = Query(default=None),
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    proposed_only: bool = Query(default=False),
+    x_user_id: str = Header(default="guest_user", alias="X-User-Id"),
+    x_user_role: str = Header(default="analyst", alias="X-User-Role"),
+    x_user_permissions: Optional[str] = Header(default="", alias="X-User-Permissions"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Devuelve la lista de candidatos aplicando autorización RBAC estricta."""
+    perms = [p.strip() for p in (x_user_permissions or "").split(",") if p.strip()]
+    repo = CandidateRepository(session)
+    items = await repo.list_candidates(
+        user_id=x_user_id,
+        user_role=x_user_role,
+        user_permissions=perms,
+        connection_id=connection_id,
+        scope=scope,
+        status=status_filter,
+        proposed_only=proposed_only
+    )
+    return KnowledgeCandidatesResponse(total=len(items), candidates=items)
+
+
+@router.post(
+    "/candidates/{candidate_id}/confirm-user",
+    summary="Confirmar regla candidata para uso exclusivo del usuario autor"
+)
+async def confirm_user_candidate(
+    candidate_id: str,
+    x_user_id: str = Header(default="guest_user", alias="X-User-Id"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """El autor ratifica un candidato para su alcance personal (scope: user)."""
+    repo = CandidateRepository(session)
+    try:
+        updated = await repo.confirm_user_candidate(candidate_id=candidate_id, user_id=x_user_id)
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Candidato no encontrado.")
+        return {"success": True, "message": "Regla confirmada para tu usuario.", "data": updated}
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+
+
+@router.post(
+    "/candidates/{candidate_id}/propose-global",
+    summary="Postular regla candidata a revisión corporativa global"
+)
+async def propose_global_candidate(
+    candidate_id: str,
+    x_user_id: str = Header(default="guest_user", alias="X-User-Id"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """El autor postula su regla personal para ser evaluada por un administrador."""
+    repo = CandidateRepository(session)
+    try:
+        updated = await repo.propose_global_candidate(candidate_id=candidate_id, user_id=x_user_id)
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Candidato no encontrado.")
+        return {"success": True, "message": "Regla propuesta para revisión corporativa.", "data": updated}
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+
+
+@router.post(
+    "/candidates/{candidate_id}/promote-global",
+    summary="Promover regla a conocimiento corporativo verificado (Exclusivo Administradores)"
+)
+async def promote_global_candidate(
+    candidate_id: str,
+    payload: Optional[PromoteCandidateRequest] = None,
+    x_user_id: str = Header(default="guest_user", alias="X-User-Id"),
+    x_user_role: str = Header(default="analyst", alias="X-User-Role"),
+    x_user_permissions: Optional[str] = Header(default="", alias="X-User-Permissions"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Promueve una regla a scope global y status verified. Rechaza con 409 si colisiona con otra global."""
+    perms = [p.strip() for p in (x_user_permissions or "").split(",") if p.strip()]
+    repo = CandidateRepository(session)
+    try:
+        updated = await repo.promote_global_candidate(
+            candidate_id=candidate_id,
+            admin_user_id=x_user_id,
+            user_role=x_user_role,
+            user_permissions=perms,
+            edited_content=payload.edited_content if payload else None,
+            reason=payload.reason if payload else None
+        )
+        return {"success": True, "message": "Regla promovida exitosamente a global.", "data": updated}
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+    except FileNotFoundError as fe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(fe))
+    except ValueError as ve:
+        err_msg = str(ve)
+        status_code = status.HTTP_409_CONFLICT if "409" in err_msg or "Conflicto" in err_msg else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=err_msg)
+
+
+@router.post(
+    "/candidates/{candidate_id}/reject",
+    summary="Descartar un candidato o regla"
+)
+async def reject_candidate(
+    candidate_id: str,
+    payload: Optional[RejectCandidateRequest] = None,
+    x_user_id: str = Header(default="guest_user", alias="X-User-Id"),
+    x_user_role: str = Header(default="analyst", alias="X-User-Role"),
+    x_user_permissions: Optional[str] = Header(default="", alias="X-User-Permissions"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Descarta una regla. Reglas de scope global exigen rol de administrador."""
+    perms = [p.strip() for p in (x_user_permissions or "").split(",") if p.strip()]
+    repo = CandidateRepository(session)
+    try:
+        updated = await repo.reject_candidate(
+            candidate_id=candidate_id,
+            actor_id=x_user_id,
+            actor_role=x_user_role,
+            user_permissions=perms,
+            reason=payload.reason if payload else None
+        )
+        return {"success": True, "message": "Candidato descartado.", "data": updated}
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+    except FileNotFoundError as fe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(fe))
+
+
+@router.post(
+    "/candidates/{candidate_id}/rollback",
+    summary="Revertir una regla a su estado anterior o desactivarla"
+)
+async def rollback_candidate(
+    candidate_id: str,
+    payload: Optional[RollbackCandidateRequest] = None,
+    x_user_id: str = Header(default="guest_user", alias="X-User-Id"),
+    x_user_role: str = Header(default="analyst", alias="X-User-Role"),
+    x_user_permissions: Optional[str] = Header(default="", alias="X-User-Permissions"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Revierte una regla restaurando su estado previo desde auditoría."""
+    perms = [p.strip() for p in (x_user_permissions or "").split(",") if p.strip()]
+    repo = CandidateRepository(session)
+    try:
+        updated = await repo.rollback_candidate(
+            candidate_id=candidate_id,
+            actor_id=x_user_id,
+            actor_role=x_user_role,
+            user_permissions=perms,
+            reason=payload.reason if payload else None
+        )
+        return {"success": True, "message": "Regla revertida correctamente.", "data": updated}
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+    except FileNotFoundError as fe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(fe))
+
+
+# ==============================================================================
+# Endpoints de Cola de Términos No Entendidos y Ambigüedades (Feature 006)
+# ==============================================================================
+
+@router.get(
+    "/unresolved-terms",
+    response_model=UnresolvedTermsResponse,
+    summary="Listar términos no entendidos, colisiones y fallos de consulta"
+)
+async def list_unresolved_terms(
+    connection_id: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Devuelve la cola de términos no entendidos para su revisión o conversión en glosario."""
+    repo = UnresolvedQueryTermRepository(session)
+    conn_uuid = None
+    if connection_id:
+        try:
+            conn_uuid = uuid.UUID(connection_id)
+        except ValueError:
+            pass
+
+    records = await repo.list_terms(
+        connection_id=conn_uuid,
+        status=status,
+        limit=limit,
+        offset=offset
+    )
+    items = [
+        UnresolvedQueryTermItem(
+            id=str(r.id),
+            connection_id=str(r.connection_id) if r.connection_id else None,
+            session_id=str(r.session_id),
+            user_id=r.user_id,
+            prompt=r.prompt,
+            extracted_term=r.extracted_term,
+            failure_reason=r.failure_reason,
+            candidate_tables=r.candidate_tables or [],
+            error_message=r.error_message,
+            status=r.status,
+            resolved_target=r.resolved_target,
+            resolved_by=r.resolved_by,
+            resolved_at=r.resolved_at.isoformat() if r.resolved_at else None,
+            created_at=r.created_at.isoformat() if r.created_at else ""
+        )
+        for r in records
+    ]
+    return UnresolvedTermsResponse(total=len(items), items=items)
+
+
+@router.post(
+    "/unresolved-terms/{term_id}/resolve",
+    summary="Resolver o descartar un término no entendido de la cola"
+)
+async def resolve_unresolved_term(
+    term_id: str,
+    payload: ResolveUnresolvedTermRequest,
+    x_user_id: str = Header(default="admin", alias="X-User-Id"),
+    session: AsyncSession = Depends(get_db_session)
+):
+    """Marca un término como resuelto o descartado asociándole la tabla de destino."""
+    try:
+        t_uuid = uuid.UUID(term_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de término inválido")
+
+    repo = UnresolvedQueryTermRepository(session)
+    updated = await repo.resolve_term(
+        term_id=t_uuid,
+        resolved_target=payload.resolved_target,
+        resolved_by=x_user_id,
+        status=payload.status
+    )
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Término no encontrado")
+
+    return {
+        "success": True,
+        "message": f"Término marcado como {payload.status}.",
+        "term_id": str(updated.id),
+        "status": updated.status,
+        "resolved_target": updated.resolved_target
+    }
