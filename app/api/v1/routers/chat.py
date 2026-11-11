@@ -138,7 +138,9 @@ async def stream_chat_message(
                     "columns": result.get("columns", []),
                     "preview_rows": result.get("preview_rows", []),
                     "sql": result.get("generated_sql"),
-                    "chart_config": result.get("chart_config")
+                    "chart_config": result.get("chart_config"),
+                    "wants_table": result.get("wants_table", False),
+                    "wants_chart": result.get("wants_chart", False)
                 })
 
             # Emitir evento de finalización (aditivo con rules_applied manteniendo session_id y latency_ms)

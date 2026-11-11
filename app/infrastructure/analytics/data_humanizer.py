@@ -23,6 +23,17 @@ BUSINESS_COLUMN_DICTIONARY: Dict[str, str] = {
     "status": "Estado",
     "role": "Rol",
     "role_name": "Rol",
+    "roles_name": "Rol",
+    "permission": "Permiso",
+    "permission_name": "Permiso",
+    "permissions_name": "Permiso",
+    "interface": "Pantalla / Interfaz",
+    "interface_name": "Pantalla / Interfaz",
+    "interfaces_name": "Pantalla / Interfaz",
+    "ecosystem": "Ecosistema",
+    "ecosystem_name": "Ecosistema",
+    "ecosystems_name": "Ecosistema",
+    "guard_name": "Guardia de Autenticación",
     "created_at": "Fecha de Creación",
     "user_created_at": "Fecha de Creación",
     "updated_at": "Última Actualización",
@@ -95,7 +106,23 @@ ENTITY_LEMMA_MAP: Dict[str, str] = {
     "cliente": "customers",
     "clientes": "customers",
     "customer": "customers",
-    "customers": "customers"
+    "customers": "customers",
+
+    # Roles, Permisos y Catálogos de Seguridad RBAC
+    "rol": "roles",
+    "roles": "roles",
+    "role": "roles",
+    "permiso": "permissions",
+    "permisos": "permissions",
+    "permission": "permissions",
+    "permissions": "permissions",
+    "ecosistema": "ecosystems",
+    "ecosistemas": "ecosystems",
+    "ecosystem": "ecosystems",
+    "ecosystems": "ecosystems",
+    "interfaz": "interfaces",
+    "interfaces": "interfaces",
+    "interface": "interfaces"
 }
 
 

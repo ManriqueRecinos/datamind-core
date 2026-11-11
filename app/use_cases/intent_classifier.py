@@ -64,6 +64,10 @@ SQL_TRIGGER_PATTERNS = [
     r"\bempresa[s]?\b",
     r"\bcompan(y|ies)\b",
     r"\bcliente[s]?\b",
+    r"\brol(es)?\b",
+    r"\bpermiso[s]?\b",
+    r"\becosistema[s]?\b",
+    r"\binterfa(z|ces)\b",
     r"\beje\s+[xy]\b",
     r"\bagrup(ar|ado|ando)\b",
     # Entidades y conceptos de maquinaria, partes y atributos
@@ -85,6 +89,8 @@ SQL_TRIGGER_PATTERNS = [
     r"\bque\s+tiene\b",
     r"\bque\s+contiene\b",
     r"\bdatos\s+de\b",
+    r"\bquien\s+(es|son)\b",
+    r"\bquienes\s+tienen\b",
 ]
 
 CHART_TRIGGER_PATTERNS = [
@@ -106,8 +112,11 @@ CHART_TRIGGER_PATTERNS = [
 TABLE_TRIGGER_PATTERNS = [
     r"\b(haz(me)?|crea(me)?|genera(me)?|muestrame|dame|ver|mostrar)\s+(una?\s+|la\s+)?tabla\b",
     r"\ben\s+(una?\s+)?(tabla|formato\s+tabular)\b",
-    r"\blist(a|ar|ame|ado)\b",
-    r"\b(muestrame|dame|traeme|ver)\s+(todos?\s+)?(los\s+|las\s+)?(registros|filas|datos|usuarios|empresas|ordenes|rollos|clientes)\b",
+    r"\blist(a|ar|ame|ado)\s+en\s+tabla\b",
+    r"\b(dame|muestrame|traeme|ver)\s+(la\s+)?data\b",
+    r"\bdata\s+de\b",
+    r"\b(exporta(r)?|descarga(r)?|baja(r)?)\s+(a\s+|en\s+)?(excel|csv|archivo)\b",
+    r"\b(muestrame|dame|traeme|ver)\s+(todos?\s+)?(los\s+|las\s+)?(registros|filas)\b",
 ]
 
 GREETING_PATTERNS = [

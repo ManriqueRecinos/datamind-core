@@ -160,6 +160,25 @@ class VectorRepository:
             )
 
         all_schema_rows = (await self.session.execute(stmt)).all()
+
+        # Si el número total de tablas de esquema sincronizadas para esta conexión es compacto (<= 15 tablas),
+        # inyectamos todos los esquemas para garantizar que las consultas relacionales multi-tabla (RBAC, joins
+        # complejos de 5+ tablas) dispongan del grafo 100% completo sin omisión de tablas puente.
+        unique_table_count = len({str((cm.metadata_ or dm.metadata_ or {}).get("table_name", "")).lower() for cm, dm in all_schema_rows if (cm.metadata_ or dm.metadata_ or {}).get("table_name")})
+        if 0 < unique_table_count <= 15:
+            full_schema_chunks = []
+            for chunk_model, doc_model in all_schema_rows:
+                meta = chunk_model.metadata_ or doc_model.metadata_ or {}
+                full_schema_chunks.append(DocumentChunk(
+                    id=str(chunk_model.id),
+                    document_id=str(chunk_model.document_id),
+                    chunk_index=chunk_model.chunk_index,
+                    chunk_text=chunk_model.chunk_text,
+                    metadata=meta,
+                    similarity_score=0.98
+                ))
+            return full_schema_chunks
+
         norm_prompt = remove_accents((prompt_text or "").lower())
 
         # Primera pasada: coincidencias léxicas directas en el prompt

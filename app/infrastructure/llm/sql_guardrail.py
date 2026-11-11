@@ -1,5 +1,6 @@
 """Validador y guardrail de seguridad para sentencias SQL generadas por la IA."""
 
+import re
 from typing import Tuple
 import sqlglot
 from sqlglot import exp
@@ -27,6 +28,33 @@ class SQLGuardrail:
     def __init__(self, max_limit: int = 500):
         self.max_limit = max_limit
 
+    @staticmethod
+    def extract_sql_query(raw_text: str) -> str:
+        """
+        Extrae limpiamente la sentencia SQL de la respuesta del LLM, descartando
+        cualquier texto conversacional previo o posterior (ej. 'Para responder... ```sql ... ```').
+        """
+        if not raw_text:
+            return ""
+
+        # 1. Buscar bloques con sintaxis de código ```sql ... ``` o ``` ... ```
+        code_block_match = re.search(r"```(?:sql)?\s*([\s\S]*?)\s*```", raw_text, re.IGNORECASE)
+        if code_block_match:
+            candidate = code_block_match.group(1).strip()
+            if candidate:
+                return candidate
+
+        # 2. Si no hay bloques de código delimitados, buscar el primer SELECT hasta el final o punto y coma
+        select_match = re.search(r"(?i)\b(SELECT\s+[\s\S]+)", raw_text)
+        if select_match:
+            candidate = select_match.group(1).strip()
+            # Si hay texto explicativo después del punto y coma, cortarlo
+            if ";" in candidate:
+                candidate = candidate.split(";")[0].strip() + ";"
+            return candidate
+
+        return raw_text.strip()
+
     def validate_and_sanitize(self, raw_sql: str, dialect: str = "mysql") -> Tuple[bool, str, str]:
         """
         Valida que la consulta sea estrictamente un SELECT y fuerza la cláusula LIMIT.
@@ -34,15 +62,9 @@ class SQLGuardrail:
         Retorna: (es_valido, sql_limpio, mensaje_error)
         """
         target_dialect = "postgres" if dialect.lower() in ("postgres", "postgresql", "pgsql") else "mysql"
-        cleaned = raw_sql.strip()
-        # Eliminar bloques markdown como ```sql ... ```
-        if cleaned.startswith("```"):
-            lines = cleaned.splitlines()
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines).strip()
+        
+        # Extraer únicamente el bloque SQL
+        cleaned = self.extract_sql_query(raw_sql)
 
         if not cleaned:
             return False, "", "La consulta SQL está vacía."

@@ -994,6 +994,8 @@ class AskChatUseCase:
             "message": message_text,
             "intent": intent,
             "has_tabular_data": has_tabular_data,
+            "wants_table": wants_table,
+            "wants_chart": wants_chart,
             "dataset_id": dataset_id,
             "row_count": row_count if has_tabular_data else None,
             "generated_sql": generated_sql,
