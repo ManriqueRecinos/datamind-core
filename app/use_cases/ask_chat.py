@@ -19,6 +19,7 @@ from app.infrastructure.database.dynamic_db_adapter import DynamicDBAdapter
 from app.infrastructure.database.mariadb_adapter import MariaDBAdapter
 from app.infrastructure.database.vector_repository import VectorRepository
 from app.infrastructure.llm.ollama_adapter import OllamaAdapter
+from app.infrastructure.llm.llm_factory import get_llm_client
 from app.infrastructure.llm.sql_guardrail import SQLGuardrail
 from app.use_cases.ingest_knowledge import IngestKnowledgeUseCase
 from app.use_cases.intent_classifier import IntentClassifier, remove_accents
@@ -34,7 +35,7 @@ class AskChatUseCase:
 
     def __init__(self, session: AsyncSession, ollama: Optional[OllamaAdapter] = None):
         self.session = session
-        self.ollama = ollama or OllamaAdapter()
+        self.ollama = ollama or get_llm_client()
         self.vector_repo = VectorRepository(session)
         self.mariadb = MariaDBAdapter()
         self.conn_manager = ManageConnectionsUseCase(session)

@@ -11,6 +11,7 @@ import sqlglot
 from app.infrastructure.database.models import ChatAttachmentModel
 from app.infrastructure.analytics.attachment_analytics_engine import AttachmentAnalyticsEngine
 from app.infrastructure.llm.ollama_adapter import OllamaAdapter
+from app.infrastructure.llm.llm_factory import get_llm_client
 import duckdb
 import polars as pl
 
@@ -23,7 +24,7 @@ class QueryAttachmentUseCase:
 
     def __init__(self, session: AsyncSession, ollama: Optional[OllamaAdapter] = None):
         self.session = session
-        self.ollama = ollama or OllamaAdapter()
+        self.ollama = ollama or get_llm_client()
 
     async def get_attachments(self, attachment_ids: List[str]) -> List[ChatAttachmentModel]:
         uuids = []

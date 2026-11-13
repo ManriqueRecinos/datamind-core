@@ -59,7 +59,8 @@ async def health_check():
         "ollama": "connected" if ollama_ok else "disconnected",
         "pgvector": "connected",
         "models": {
-            "llm": settings.llm_model,
+            "llm_provider": settings.llm_provider,
+            "llm": settings.nvidia_llm_model if settings.llm_provider == "nvidia" else settings.llm_model,
             "embedding": settings.embedding_model
         }
     }

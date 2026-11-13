@@ -3,6 +3,7 @@
 import logging
 from typing import Optional, Tuple
 from app.infrastructure.llm.ollama_adapter import OllamaAdapter
+from app.infrastructure.llm.llm_factory import get_llm_client
 from app.infrastructure.llm.sql_guardrail import SQLGuardrail
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ class SqlRepairAgent:
     """Corrige consultas SQL fallidas retroalimentando el error exacto del motor de base de datos."""
 
     def __init__(self, ollama: Optional[OllamaAdapter] = None, guardrail: Optional[SQLGuardrail] = None):
-        self.ollama = ollama or OllamaAdapter()
+        self.ollama = ollama or get_llm_client()
         self.guardrail = guardrail or SQLGuardrail(max_limit=500)
 
     async def attempt_repair(

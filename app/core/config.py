@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL")
     ollama_timeout_seconds: float = Field(default=60.0, alias="OLLAMA_TIMEOUT_SECONDS")
 
+    # Proveedor LLM de generación de texto: "ollama" (local) | "nvidia" (NVIDIA NIM en la nube).
+    # Los embeddings siempre se calculan con Ollama (768 dim) para no re-vectorizar pgvector.
+    llm_provider: str = Field(default="ollama", alias="LLM_PROVIDER")
+    nvidia_api_key: Optional[str] = Field(default=None, alias="NVIDIA_API_KEY")
+    nvidia_base_url: str = Field(default="https://integrate.api.nvidia.com/v1", alias="NVIDIA_BASE_URL")
+    nvidia_llm_model: str = Field(default="google/gemma-4-31b-it", alias="NVIDIA_LLM_MODEL")
+    nvidia_timeout_seconds: float = Field(default=90.0, alias="NVIDIA_TIMEOUT_SECONDS")
+    nvidia_fallback_to_ollama: bool = Field(default=False, alias="NVIDIA_FALLBACK_TO_OLLAMA")
+
     # PostgreSQL con pgvector
     postgres_host: str = Field(default="127.0.0.1", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
