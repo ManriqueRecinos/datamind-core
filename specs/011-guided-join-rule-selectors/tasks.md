@@ -26,3 +26,43 @@ Repositorio: `D:\Laravel\Supertex AI` (FastAPI no cambia).
 
 ## Dependencias
 T001–T003 → T005 → T006–T008 → T009 → T010–T012. T004 es paralelizable con T005.
+
+---
+
+# FASE 2: Constructor de Consultas Grandes
+
+Repos: FastAPI `D:\Python\python-db` (backend) y Laravel `D:\Laravel\Supertex AI` (proxy + UI).
+
+## 2a. Backend FastAPI (python-db)
+- [ ] T020 `app/domain/query_blueprint.py`: modelos Pydantic (`Blueprint`, `JoinSpec`, `UnionSpec`, `SelectItem`, `WhereItem`) con validación: tipos de join (`INNER|LEFT|RIGHT|FULL|CROSS`), máx. 30 tablas y 10 uniones.
+- [ ] T021 `app/use_cases/query_blueprint.py::compile`: blueprint -> SQL con el constructor de `sqlglot` (select/from/join/where/group/order/limit/union), dialecto `postgres` o `mysql`.
+- [ ] T022 `parse`: SQL -> blueprint recorriendo el AST (`exp.Select`, `exp.Join` side/kind, `exp.Union`, `exp.With`); lo no mapeable pasa a `raw_blocks`.
+- [ ] T023 `validate`: comprobar que tablas y columnas existen y están vectorizadas (usar `synced_tables` + introspección); devolver la lista de elementos inválidos; verificar mismo número de columnas entre bloques `UNION`.
+- [ ] T024 `dry_run`: pasar por `SQLGuardrail.validate_and_sanitize` (solo `SELECT/WITH/UNION`), forzar `LIMIT 20`, timeout corto, solo lectura.
+- [ ] T025 `app/api/v1/routers/query_blueprint.py`: `POST /query-blueprint/{parse|compile|validate|dry-run}`; registrar en `api_router`.
+- [ ] T026 `tests/unit/test_query_blueprint.py`: ida y vuelta SQL -> blueprint -> SQL; LEFT/INNER/RIGHT/FULL; `UNION ALL`; CTE -> `raw_blocks`; rechazo de `DELETE/DROP`; tabla no vectorizada marcada; límites de tamaño.
+
+## 2b. Proxy Laravel + constructor visual
+- [ ] T030 `FastApiClient`: `parseBlueprint`, `compileBlueprint`, `validateBlueprint`, `dryRunBlueprint`.
+- [ ] T031 `TrainingController`: 4 acciones proxy y rutas `POST /training/query-blueprint/{parse|compile|validate|dry-run}`.
+- [ ] T032 `public/js/query_builder.js`: estado del blueprint en memoria, tabla base con `TablePicker`.
+- [ ] T033 Filas repetibles de unión: tipo + tabla (`TablePicker`) + columna izquierda/derecha (selects desde `/training/vectorized-tables/columns`); una columna FK autocompleta tabla destino y `ON`.
+- [ ] T034 Selección de columnas con alias, filtros `WHERE`, `ORDER BY` y `LIMIT`.
+- [ ] T035 Vista previa del SQL en vivo (debounce 300 ms, llama a `compile`) y botón "Probar (LIMIT 20)" con resultado en tabla.
+- [ ] T036 `training/index.blade.php`: nueva plantilla "Consulta compuesta" con pestañas Constructor / Script SQL (la pestaña Script llega en 2c).
+
+## 2c. UNION, script SQL y guardado
+- [ ] T040 Bloques `UNION`/`UNION ALL` anidados, cada uno con su propio constructor y aviso si difiere el número de columnas.
+- [ ] T041 Pestaña Script SQL: textarea -> "Convertir a constructor" (`parse`), rellena el constructor; elementos inválidos en rojo.
+- [ ] T042 `raw_blocks`: mostrar los fragmentos no representables como bloque SQL editable que se conserva al compilar.
+- [ ] T043 Guardar: crear regla `sql_example` con `sql_query` y `blueprint` en `metadata` (vía `/chat/training/train`); reabrir una regla del catálogo reconstruye el constructor.
+- [ ] T044 Reset total del constructor al guardar y al cambiar de conexión.
+
+## 2d. Pulido
+- [ ] T050 Agregados y `GROUP BY` (COUNT/SUM/AVG/MIN/MAX) en el constructor.
+- [ ] T051 Alias de tablas automáticos y mensajes de error claros por cada regla de validación.
+- [ ] T052 Prueba con SUMAIE: `users -> role_user -> roles` con dos `INNER JOIN`; cambiar uno a `LEFT JOIN`; script con `LEFT`, `INNER` y `UNION ALL` ida y vuelta; script con `DELETE` rechazado.
+- [ ] T053 Commits en ambos repos y actualización de este archivo.
+
+## Dependencias
+T020 -> T021, T022 -> T023, T024 -> T025 -> T026 -> T030, T031 -> T032 -> T033 -> T034 -> T035 -> T036 -> T040 -> T041 -> T042 -> T043 -> T044 -> T050 -> T051 -> T052 -> T053. T021 y T022 son paralelizables.
