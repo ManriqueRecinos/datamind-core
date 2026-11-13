@@ -33,3 +33,46 @@ Reemplazar esos campos de texto por selectores alimentados con las **tablas ya v
 - La introspección de columnas es lo costoso: por eso se pide por tabla y bajo demanda, no todo de golpe.
 - Si la conexión no tiene tablas vectorizadas, se muestra un enlace a "Esquemas y Tablas" para vectorizar.
 - Aplica a la vista `/training` y al modal heredado `chat.partials.training-center-modal`, que debería compartir el mismo componente.
+
+---
+
+## 7. Ampliación (pedida el 2026-11-13): Columna Foránea como selectpicker + Constructor de Consultas Grandes
+
+### 7.1 Columna Foránea como selectpicker
+El campo "Columna Foránea" ya es un `<select>` dependiente de la Tabla Origen (implementado en esta feature). Esta ampliación lo mantiene como requisito formal: **nunca texto libre**; siempre un selectpicker alimentado con las columnas reales de la tabla vectorizada elegida (FK primero, luego `*_id`).
+
+### 7.2 Constructor de consultas grandes ("Consulta Enorme")
+En el mismo apartado de enseñanza se añade una plantilla **"Consulta compuesta"** para armar consultas con muchas tablas, de dos maneras que se pueden combinar:
+
+**A) Constructor visual (selectpickers)**
+- Tabla base (selector paginado 10 en 10, igual que Tabla Origen).
+- Lista repetible de **uniones**: tipo (`INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN`, `CROSS JOIN`) + tabla (selector) + columna izquierda (selector) + columna derecha (selector). Al elegir la columna foránea se sugiere la tabla destino y la condición `ON`.
+- Selección de columnas a mostrar (con alias), filtros `WHERE` (columna + operador + valor), `GROUP BY`/agregados, `ORDER BY` y `LIMIT`.
+- **Bloques `UNION` / `UNION ALL`**: se pueden agregar varias consultas (cada una con su propio constructor) unidas entre sí; se valida que tengan el mismo número de columnas.
+- Vista previa del SQL generado en tiempo real, resaltado y editable.
+
+**B) Script SQL → estructura**
+- Cuadro para pegar un `SELECT` largo (con `JOIN`, `LEFT/INNER`, `UNION`, subconsultas, CTEs `WITH`).
+- El backend lo **parsea con `sqlglot`** (ya usado en `SQLGuardrail`) y lo convierte al mismo modelo visual (tablas, uniones, columnas, filtros), de modo que se pueda revisar/ajustar con selectpickers y volver a generar el SQL.
+- Si una parte no se puede representar visualmente, se conserva como "bloque SQL crudo" sin perderla.
+
+### 7.3 Requisitos funcionales adicionales
+- FR-6: Modelo intermedio JSON (`query_blueprint`): `{base, joins[{type,table,left,right}], select[], where[], group_by[], order_by[], limit, unions[]}` como fuente única entre constructor visual y script SQL.
+- FR-7: Endpoint `POST /training/query-blueprint/parse` (SQL → blueprint) y `POST /training/query-blueprint/compile` (blueprint → SQL por dialecto PostgreSQL/MariaDB).
+- FR-8: Validación de seguridad: solo `SELECT`/`WITH`/`UNION`; se rechaza `INSERT/UPDATE/DELETE/DDL` (reutilizar `SQLGuardrail`); límite razonable de uniones/tablas (p. ej. 30) para no generar consultas inejecutables.
+- FR-9: Validación contra el esquema: todas las tablas y columnas deben existir y estar vectorizadas; las que no, se marcan en rojo antes de guardar.
+- FR-10: Al guardar se crea una regla `sql_example` verificada (SQL + título + explicación) vectorizada en pgvector, con el blueprint en `metadata` para poder reabrirla y editarla después.
+- FR-11: Probar sin guardar: botón "Ejecutar con LIMIT 20" sobre la conexión (solo lectura) para comprobar que el SQL funciona antes de enseñarlo a la IA.
+
+### 7.4 Criterios de aceptación adicionales
+- Armar `users → role_user → roles` con dos `INNER JOIN` desde selectpickers y obtener el SQL correcto.
+- Cambiar un join a `LEFT JOIN` regenera el SQL sin perder el resto.
+- Pegar un script con `LEFT JOIN`, `INNER JOIN` y `UNION ALL` lo convierte al constructor y, al compilarlo de vuelta, produce SQL equivalente (misma estructura al reparsearlo).
+- Un script con `DELETE` o `DROP` es rechazado con mensaje claro.
+- Una tabla no vectorizada dentro del script se señala antes de guardar.
+
+### 7.5 Riesgos
+- Consultas muy grandes pueden ser lentas en la base remota: la prueba usa `LIMIT` y timeout corto.
+- SQL con construcciones exóticas (funciones propias, window functions complejas) puede no mapear al modelo visual: se conserva como bloque crudo.
+- Diferencias de dialecto (PostgreSQL vs MariaDB): compilar siempre con el dialecto de la conexión elegida.
+- Alcance grande: se recomienda implementarlo como **fase 2** de la feature 011, después de validar los selectores básicos.
