@@ -414,6 +414,13 @@ class AskChatUseCase:
         else:
             user_msg_id = str(reused_user_msg.id)
 
+        is_global_mode = (not connection_id or connection_id.lower() in ("global", "none", "null"))
+
+        # En modo global (sin sesión o alcance global explícito), no ejecutar Text-to-SQL forzoso contra BD única
+        if is_global_mode and intent == "data_query":
+            # Si el usuario hace preguntas de tablas/conceptos/reglas globales, tratarlo como RAG conceptual
+            intent = "process_qa"
+
         if intent == "teach_knowledge":
             # El usuario le está enseñando una regla, relación JOIN, diccionario o fórmula directamente en el chat
             capsule = IntentClassifier.extract_teaching_capsule(prompt)
@@ -497,17 +504,39 @@ class AskChatUseCase:
             )
 
         elif intent == "process_qa":
-            # RAG de Procesos en pgvector
+            # RAG Global en pgvector (Manuales, Documentos Ingeridos, Reglas Aprendidas y Esquemas Conceptuales)
             query_vec = await self.ollama.generate_embedding(prompt)
-            chunks = await self.vector_repo.search_similar(query_vec, top_k=3, category="process_manual")
-            context = "\n---\n".join([c.chunk_text for c in chunks]) if chunks else "No se encontró información específica en los manuales."
+            # 1. Documentos y manuales
+            doc_chunks = await self.vector_repo.search_similar(query_vec, top_k=4)
+            # 2. Reglas de negocio y conceptos aprendidos de todas las bases
+            rule_chunks = await self.vector_repo.search_learned_rules(query_embedding=query_vec, prompt_text=prompt, top_k=4)
+            # 3. Esquemas conceptuales
+            schema_chunks = await self.vector_repo.search_schema_with_relations(query_embedding=query_vec, prompt_text=prompt, top_k=4)
+
+            context_parts = []
+            if doc_chunks:
+                context_parts.append("DOCUMENTOS Y MANUALES:\n" + "\n---\n".join([c.chunk_text for c in doc_chunks]))
+            if rule_chunks:
+                context_parts.append("REGLAS DE NEGOCIO Y CONCEPTOS APRENDIDOS:\n" + "\n---\n".join([c.chunk_text for c in rule_chunks]))
+            if schema_chunks:
+                context_parts.append("ESTRUCTURA Y RELACIONES DE ENTIDADES:\n" + "\n---\n".join([c.chunk_text for c in schema_chunks]))
+
+            context = "\n\n===================\n\n".join(context_parts) if context_parts else "No se encontró información específica en la base de conocimiento global."
 
             sys_prompt = (
-                "Eres un asistente de procesos corporativos. Responde a la pregunta del usuario utilizando "
-                "el siguiente contexto de manuales y procedimientos. Si no tienes la información, indícalo "
-                "con amabilidad sin inventar datos. Redacta en español formal y claro, estructurando la respuesta "
-                "en Markdown (encabezados `###`, viñetas `-`, **negritas** y código en línea `como_este`).\n\n"
-                f"CONTEXTO DE PROCESOS:\n{context}"
+                "Eres DataMind AI, un analista de datos y asistente de conocimiento corporativo. "
+                "Estás operando en 'Modo Conocimiento Global', respondiendo con base en todas las tablas, "
+                "documentos, manuales y conceptos que has aprendido transversalmente.\n"
+                "Instrucciones:\n"
+                "- Responde a la pregunta del usuario utilizando el contexto proporcionado.\n"
+                "- Si la pregunta se refiere a relaciones entre entidades (ej: roles, usuarios, permisos), "
+                "explica con claridad conceptual cómo se vinculan y qué significado tienen.\n"
+                "- Si el usuario solicita consultar datos vivos o registros específicos de una tabla, "
+                "explícale conceptualmente lo que sabes y recuérdale con amabilidad que para ejecutar consultas "
+                "SQL en vivo debe seleccionar una base de datos conectada o iniciar sesión.\n"
+                "- Redacta en español formal, claro y profesional, con formato Markdown (encabezados `###`, "
+                "listas `-` y conceptos clave en **negritas**).\n\n"
+                f"CONTEXTO GLOBAL DE CONOCIMIENTO:\n{context}"
             )
             message_text = await self.ollama.generate_completion(prompt=prompt, system_prompt=sys_prompt)
 
