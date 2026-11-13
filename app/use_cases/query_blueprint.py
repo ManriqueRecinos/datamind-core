@@ -106,8 +106,11 @@ class QueryBlueprintUseCase:
             # Construir condiciones ON
             on_clauses = []
             for cond in j.on:
-                op = cond.op.strip() if cond.op else "="
-                on_clauses.append(f"{cond.left.strip()} {op} {cond.right.strip()}")
+                left_c = (cond.left or "").strip()
+                right_c = (cond.right or "").strip()
+                if left_c and right_c:
+                    op = cond.op.strip() if cond.op else "="
+                    on_clauses.append(f"{left_c} {op} {right_c}")
 
             on_str = " AND ".join(on_clauses) if on_clauses else "1 = 1"
             join_type_str = j.type.value if hasattr(j.type, "value") else str(j.type)

@@ -29,9 +29,9 @@ class BaseTableSpec(BaseModel):
 
 
 class OnCondition(BaseModel):
-    left: str = Field(..., description="Columna o expresión izquierda (ej. 'u.id')")
+    left: Optional[str] = Field(default="", description="Columna o expresión izquierda (ej. 'u.id')")
     op: str = Field(default="=", description="Operador de comparación (=, !=, <, >, <=, >=, LIKE)")
-    right: str = Field(..., description="Columna o expresión derecha (ej. 'ru.user_id')")
+    right: Optional[str] = Field(default="", description="Columna o expresión derecha (ej. 'ru.user_id')")
 
 
 class JoinSpec(BaseModel):
@@ -42,13 +42,13 @@ class JoinSpec(BaseModel):
 
 
 class SelectItem(BaseModel):
-    expr: str = Field(..., description="Columna o expresión SQL (ej. 'u.name' o 'COUNT(*)')")
+    expr: Optional[str] = Field(default="*", description="Columna o expresión SQL (ej. 'u.name' o 'COUNT(*)')")
     alias: Optional[str] = Field(None, description="Alias de la columna (ej. 'nombre_usuario')")
     agg: Optional[str] = Field(None, description="Función de agregación opcional: COUNT, SUM, AVG, MIN, MAX")
 
 
 class WhereCondition(BaseModel):
-    left: str = Field(..., description="Columna o expresión evaluada")
+    left: Optional[str] = Field(default="", description="Columna o expresión evaluada")
     op: str = Field(default="=", description="Operador (=, !=, <, >, <=, >=, LIKE, ILIKE, IN, IS NULL, IS NOT NULL)")
     value: Optional[Any] = Field(None, description="Valor o lista de valores para la condición")
     logic: str = Field(default="AND", description="Operador lógico con respecto a la condición anterior (AND / OR)")
