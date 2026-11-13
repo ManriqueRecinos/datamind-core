@@ -4,6 +4,7 @@ Utiliza `sqlglot` como motor AST canónico y `SQLGuardrail` para el aislamiento 
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Union
+import re
 import uuid
 import sqlglot
 from sqlglot import exp, select
@@ -134,7 +135,11 @@ class QueryBlueprintUseCase:
                     else:
                         part = f"{left} IN ({val})"
                 else:
-                    if isinstance(val, str) and not (val.startswith("'") and val.endswith("'")):
+                    # Si el valor tiene formato alias.columna (identificador SQL) o número, no entrecomillar
+                    is_identifier_ref = isinstance(val, str) and re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*$", val)
+                    is_numeric = isinstance(val, str) and re.match(r"^-?\d+(?:\.\d+)?$", val)
+
+                    if isinstance(val, str) and not is_identifier_ref and not is_numeric and not (val.startswith("'") and val.endswith("'")):
                         part = f"{left} {op} '{val}'"
                     else:
                         part = f"{left} {op} {val}"
