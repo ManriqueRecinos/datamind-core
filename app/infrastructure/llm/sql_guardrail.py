@@ -44,10 +44,10 @@ class SQLGuardrail:
             if candidate:
                 return candidate
 
-        # 2. Si no hay bloques de código delimitados, buscar el primer SELECT hasta el final o punto y coma
-        select_match = re.search(r"(?i)\b(SELECT\s+[\s\S]+)", raw_text)
-        if select_match:
-            candidate = select_match.group(1).strip()
+        # 2. Si no hay bloques de código delimitados, buscar el primer WITH o SELECT hasta el final o punto y coma
+        query_match = re.search(r"(?i)\b((?:WITH|SELECT)\s+[\s\S]+)", raw_text)
+        if query_match:
+            candidate = query_match.group(1).strip()
             # Si hay texto explicativo después del punto y coma, cortarlo
             if ";" in candidate:
                 candidate = candidate.split(";")[0].strip() + ";"
