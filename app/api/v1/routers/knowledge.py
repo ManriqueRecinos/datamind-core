@@ -109,6 +109,13 @@ async def train_knowledge_capsule(
             f"y selecciona `{tgt_t}.{lbl_col}`.\nDetalle: {payload.content}"
         )
     elif category == "sql_example" and payload.sql_query:
+        try:
+            import sqlglot
+            from sqlglot import exp
+            parsed_ex = sqlglot.parse_one(payload.sql_query, read="mysql")
+            related_tables = list({t.name for t in parsed_ex.find_all(exp.Table) if t.name})
+        except Exception:
+            related_tables = []
         enriched_content = (
             f"EJEMPLO SQL DE ORO (FEW-SHOT) ENSEÑADO POR EL USUARIO:\n"
             f"Pregunta / Caso: {payload.title} - {payload.content}\n"
@@ -140,6 +147,18 @@ async def train_knowledge_capsule(
         "sql_query": payload.sql_query,
         "taught_by": "user"
     }
+
+    if payload.concept_id:
+        from app.infrastructure.database.models import KnowledgeConceptModel
+        try:
+            c_uuid = uuid.UUID(str(payload.concept_id))
+            concept_obj = await session.get(KnowledgeConceptModel, c_uuid)
+            if concept_obj:
+                metadata["concept_id"] = str(concept_obj.id)
+                metadata["concept_short_name"] = concept_obj.short_name
+                metadata["concept_long_name"] = concept_obj.long_name
+        except Exception:
+            pass
 
     result = await ingest_uc.execute(
         title=payload.title,
@@ -534,4 +553,132 @@ async def resolve_unresolved_term(
         "term_id": str(updated.id),
         "status": updated.status,
         "resolved_target": updated.resolved_target
+    }
+
+
+from pydantic import BaseModel, Field
+
+
+class KnowledgeConceptCreateRequest(BaseModel):
+    short_name: str = Field(..., min_length=1, max_length=50)
+    long_name: str = Field(..., min_length=1, max_length=150)
+    description: str = Field(..., min_length=1)
+
+
+@router.get("/concepts", summary="Listar conceptos de negocio para clasificar aprendizajes")
+async def list_knowledge_concepts(session: AsyncSession = Depends(get_db_session)):
+    from sqlalchemy import select
+    from app.infrastructure.database.models import KnowledgeConceptModel
+
+    stmt = select(KnowledgeConceptModel).order_by(KnowledgeConceptModel.long_name.asc())
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "short_name": r.short_name,
+            "long_name": r.long_name,
+            "description": r.description,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/concepts", status_code=status.HTTP_201_CREATED, summary="Crear y vectorizar un nuevo concepto de negocio")
+async def create_knowledge_concept(
+    payload: KnowledgeConceptCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+):
+    from sqlalchemy import select
+    from app.infrastructure.database.models import KnowledgeConceptModel
+
+    short_clean = payload.short_name.strip().upper()
+    existing = (
+        await session.execute(
+            select(KnowledgeConceptModel).where(KnowledgeConceptModel.short_name == short_clean)
+        )
+    ).scalars().first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Ya existe un concepto con nombre corto '{short_clean}'.")
+
+    concept = KnowledgeConceptModel(
+        short_name=short_clean,
+        long_name=payload.long_name.strip(),
+        description=payload.description.strip(),
+    )
+    session.add(concept)
+    await session.commit()
+    await session.refresh(concept)
+
+    # Vectorizar en chunks en pgvector para que el RAG diferencie entre dominios
+    use_case = IngestKnowledgeUseCase(session)
+    await use_case.execute(
+        title=f"[CONCEPTO: {concept.short_name}] {concept.long_name}",
+        category="concept_definition",
+        department=concept.short_name,
+        content=(
+            f"Concepto de negocio: {concept.long_name} ({concept.short_name}).\n"
+            f"Descripción y alcance: {concept.description}"
+        ),
+        metadata={
+            "concept_id": str(concept.id),
+            "concept_short_name": concept.short_name,
+            "concept_long_name": concept.long_name,
+        },
+    )
+
+    return {
+        "id": str(concept.id),
+        "short_name": concept.short_name,
+        "long_name": concept.long_name,
+        "description": concept.description,
+        "created_at": concept.created_at.isoformat() if concept.created_at else None,
+    }
+
+
+@router.put("/concepts/{concept_id}", summary="Actualizar y re-vectorizar un concepto de negocio")
+async def update_knowledge_concept(
+    concept_id: str,
+    payload: KnowledgeConceptCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+):
+    from app.infrastructure.database.models import KnowledgeConceptModel
+
+    try:
+        c_uuid = uuid.UUID(str(concept_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID de concepto inválido.")
+
+    concept = await session.get(KnowledgeConceptModel, c_uuid)
+    if not concept:
+        raise HTTPException(status_code=404, detail="Concepto no encontrado.")
+
+    concept.short_name = payload.short_name.strip().upper()
+    concept.long_name = payload.long_name.strip()
+    concept.description = payload.description.strip()
+    await session.commit()
+    await session.refresh(concept)
+
+    use_case = IngestKnowledgeUseCase(session)
+    await use_case.execute(
+        title=f"[CONCEPTO: {concept.short_name}] {concept.long_name}",
+        category="concept_definition",
+        department=concept.short_name,
+        content=(
+            f"Concepto de negocio: {concept.long_name} ({concept.short_name}).\n"
+            f"Descripción y alcance: {concept.description}"
+        ),
+        metadata={
+            "concept_id": str(concept.id),
+            "concept_short_name": concept.short_name,
+            "concept_long_name": concept.long_name,
+        },
+    )
+
+    return {
+        "id": str(concept.id),
+        "short_name": concept.short_name,
+        "long_name": concept.long_name,
+        "description": concept.description,
+        "created_at": concept.created_at.isoformat() if concept.created_at else None,
     }

@@ -69,6 +69,7 @@ class TrainKnowledgeRequest(BaseModel):
     title: str = Field(..., min_length=3, max_length=255, description="Título descriptivo de la enseñanza")
     content: str = Field(..., min_length=5, description="Regla, relación, fórmula o consulta SQL de ejemplo")
     connection_id: Optional[str] = Field(default=None, description="ID de conexión asociada (opcional)")
+    concept_id: Optional[str] = Field(default=None, description="ID del concepto de negocio asociado (opcional)")
     source_table: Optional[str] = Field(default=None, description="Tabla origen si es custom_relation")
     source_column: Optional[str] = Field(default=None, description="Columna llave foránea si es custom_relation")
     target_table: Optional[str] = Field(default=None, description="Tabla maestra destino si es custom_relation")

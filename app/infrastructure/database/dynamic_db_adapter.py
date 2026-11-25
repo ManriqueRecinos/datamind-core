@@ -77,6 +77,102 @@ class DynamicDBAdapter(RelationalDbInterface):
             return await self._introspect_postgres()
         return await self._introspect_mysql()
 
+    async def introspect_routines(self) -> List[Dict[str, Any]]:
+        """Extrae funciones y procedimientos almacenados de la base de datos conectada."""
+        if self.is_postgres:
+            return await self._introspect_postgres_routines()
+        return await self._introspect_mysql_routines()
+
+    async def _introspect_mysql_routines(self) -> List[Dict[str, Any]]:
+        conn = await asyncio.wait_for(
+            aiomysql.connect(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                db=self.db,
+                cursorclass=aiomysql.DictCursor,
+                connect_timeout=self.timeout,
+            ),
+            timeout=self.timeout,
+        )
+        try:
+            async with conn.cursor() as cursor:
+                query = """
+                SELECT
+                    ROUTINE_SCHEMA AS schema_name,
+                    ROUTINE_NAME AS routine_name,
+                    ROUTINE_TYPE AS routine_type,
+                    COALESCE(DATA_TYPE, '') AS return_type,
+                    COALESCE(ROUTINE_COMMENT, '') AS routine_comment,
+                    COALESCE(ROUTINE_DEFINITION, '') AS routine_definition
+                FROM INFORMATION_SCHEMA.ROUTINES
+                WHERE ROUTINE_SCHEMA = %s
+                ORDER BY ROUTINE_TYPE, ROUTINE_NAME;
+                """
+                await cursor.execute(query, (self.db,))
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "schema_name": r.get("schema_name") or self.db,
+                        "routine_name": r["routine_name"],
+                        "routine_type": r["routine_type"],
+                        "return_type": r.get("return_type") or "",
+                        "parameters": "",
+                        "comment": r.get("routine_comment") or "",
+                        "definition": (r.get("routine_definition") or "")[:4000],
+                    }
+                    for r in rows
+                ]
+        finally:
+            conn.close()
+
+    async def _introspect_postgres_routines(self) -> List[Dict[str, Any]]:
+        conn = await asyncio.wait_for(
+            asyncpg.connect(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                database=self.db,
+                timeout=self.timeout,
+            ),
+            timeout=self.timeout,
+        )
+        try:
+            query = """
+            SELECT
+                n.nspname AS schema_name,
+                p.proname AS routine_name,
+                CASE p.prokind
+                    WHEN 'p' THEN 'PROCEDURE'
+                    ELSE 'FUNCTION'
+                END AS routine_type,
+                COALESCE(pg_catalog.pg_get_function_result(p.oid), '') AS return_type,
+                COALESCE(pg_catalog.pg_get_function_arguments(p.oid), '') AS parameters,
+                COALESCE(pg_catalog.obj_description(p.oid, 'pg_proc'), '') AS routine_comment,
+                COALESCE(p.prosrc, '') AS routine_definition
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+            ORDER BY routine_type, p.proname;
+            """
+            records = await conn.fetch(query)
+            return [
+                {
+                    "schema_name": r["schema_name"],
+                    "routine_name": r["routine_name"],
+                    "routine_type": r["routine_type"],
+                    "return_type": r["return_type"] or "",
+                    "parameters": r["parameters"] or "",
+                    "comment": r["routine_comment"] or "",
+                    "definition": (r["routine_definition"] or "")[:4000],
+                }
+                for r in records
+            ]
+        finally:
+            await conn.close()
+
     async def _execute_mysql_query(self, sql: str) -> List[Dict[str, Any]]:
         conn = await asyncio.wait_for(
             aiomysql.connect(
@@ -419,6 +515,35 @@ class DynamicDBAdapter(RelationalDbInterface):
                     "descriptive_columns": table_descriptive_cols.get(target_table, []),
                     "relationship_type": "inferred_fk"
                 })
+
+        # 2b. Inferir relaciones por columna ID idéntica (cuando la tabla destino tiene esa columna como PK)
+        pk_to_tables: Dict[str, List[str]] = {}
+        for t_name, pk_col in table_pk_col.items():
+            pk_low = pk_col.lower()
+            if pk_low and pk_low != "id":
+                pk_to_tables.setdefault(pk_low, []).append(t_name)
+
+        for src_t, cols in tables.items():
+            src_pk = table_pk_col.get(src_t, "").lower()
+            for c in cols:
+                c_name = c["name"]
+                c_low = c_name.lower()
+                if c_low == src_pk or c_low == "id":
+                    continue
+                for target_table in pk_to_tables.get(c_low, []):
+                    if target_table == src_t:
+                        continue
+                    edge_key = (src_t.lower(), c_low, target_table.lower())
+                    if edge_key in seen_edges:
+                        continue
+                    seen_edges.add(edge_key)
+                    outgoing_fks[src_t].append({
+                        "column": c_name,
+                        "referenced_table": target_table,
+                        "referenced_column": table_pk_col[target_table],
+                        "descriptive_columns": table_descriptive_cols.get(target_table, []),
+                        "relationship_type": "inferred_fk",
+                    })
 
         # 3. Construir relaciones inversas (referenced_by) y lista consolidada de tablas vecinas (1-Hop)
         incoming_refs: Dict[str, List[Dict[str, Any]]] = {k: [] for k in tables.keys()}

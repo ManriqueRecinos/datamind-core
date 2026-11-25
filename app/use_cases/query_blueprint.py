@@ -568,13 +568,8 @@ class QueryBlueprintUseCase:
                 "sql_executed": sql_query
             }
 
-        # 2. Forzar estrictamente LIMIT 20 si es necesario
-        try:
-            parsed = sqlglot.parse_one(sanitized_sql, read=adapter.sqlglot_dialect)
-            parsed = parsed.limit(20)
-            final_sql = parsed.sql(adapter.sqlglot_dialect)
-        except Exception:
-            final_sql = sanitized_sql
+        # 2. Respetar el LIMIT definido por el usuario (sin forzar LIMIT 20 por defecto)
+        final_sql = sanitized_sql
 
         # 3. Ejecutar consulta en la conexión dinámica
         try:

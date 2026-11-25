@@ -198,6 +198,26 @@ async def vectorize_connection_tables(
         )
 
 
+@router.post(
+    "/{connection_id}/vectorize-routines",
+    summary="Vectorizar en pgvector las funciones y procedimientos almacenados de la conexión"
+)
+async def vectorize_connection_routines(
+    connection_id: str,
+    session: AsyncSession = Depends(get_db_session)
+) -> Dict[str, Any]:
+    try:
+        use_case = ManageConnectionsUseCase(session)
+        return await use_case.vectorize_routines(connection_id=connection_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error durante la vectorización de rutinas: {str(e)}"
+        )
+
+
 @router.delete(
     "/{connection_id}",
     summary="Eliminar una conexión y sus vectores de esquema asociados"

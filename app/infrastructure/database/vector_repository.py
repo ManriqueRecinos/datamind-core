@@ -197,6 +197,13 @@ class VectorRepository:
             if (
                 (len(t_norm) >= 3 and re.search(rf"\b{re.escape(t_norm)}\b", norm_prompt))
                 or (len(t_clean) >= 3 and re.search(rf"\b{re.escape(t_clean)}\b", norm_prompt))
+                or (
+                    t_norm == "op"
+                    and re.search(
+                        r"\b(op|ops|ots|ot|orden)\b|\b(?:ots|ot|op)[-\s]?\d{3,10}\b|\b(de\s+la|la)\s+\d{4,8}\b",
+                        norm_prompt,
+                    )
+                )
             ):
                 collected_by_id[c_id] = DocumentChunk(
                     id=c_id,
@@ -290,25 +297,71 @@ class VectorRepository:
             if connection_id and doc_conn and str(doc_conn) != str(connection_id):
                 continue
 
-            c_id = str(chunk_model.id)
+            doc_id = str(doc_model.id)
             sim = round(max(0.0, 1.0 - float(dist)), 4)
             # Impulsar score si menciona una tabla presente en el prompt
             for rel_t in (meta.get("related_tables") or []):
                 rel_norm = remove_accents(str(rel_t).lower())
                 if len(rel_norm) >= 3 and re.search(rf"\b{re.escape(rel_norm)}\b", norm_prompt):
                     sim = max(sim, 0.96)
+                elif rel_norm == "op" and re.search(
+                    r"\b(op|ops|ots|ot|orden)\b|\b(?:ots|ot|op)[-\s]?\d{3,10}\b|\b(de\s+la|la)\s+\d{4,8}\b",
+                    norm_prompt,
+                ):
+                    sim = max(sim, 0.96)
 
-            collected[c_id] = DocumentChunk(
-                id=c_id,
-                document_id=str(chunk_model.document_id),
-                chunk_index=chunk_model.chunk_index,
-                chunk_text=chunk_model.chunk_text,
-                metadata={"category": doc_model.category, "title": doc_model.title, **meta},
-                similarity_score=sim
-            )
+            # Usar el contenido íntegro del documento (doc_model.content) para que los ejemplos SQL
+            # compuestos (>600 caracteres) jamás se entreguen truncados al generador de SQL
+            full_rule_text = (doc_model.content or chunk_model.chunk_text or "").strip()
+            existing = collected.get(doc_id)
+            if existing is None or sim > (existing.similarity_score or 0.0):
+                collected[doc_id] = DocumentChunk(
+                    id=str(chunk_model.id),
+                    document_id=doc_id,
+                    chunk_index=0,
+                    chunk_text=full_rule_text,
+                    metadata={"category": doc_model.category, "title": doc_model.title, **meta},
+                    similarity_score=sim
+                )
 
         sorted_rules = sorted(collected.values(), key=lambda x: x.similarity_score or 0.0, reverse=True)
         return sorted_rules[:top_k]
+
+    async def get_schema_chunks_by_table_names(
+        self,
+        table_names: List[str],
+        connection_id: Optional[str] = None
+    ) -> List[DocumentChunk]:
+        """Recupera los chunks de esquema (`db_schema`) correspondientes a una lista de nombres de tabla."""
+        if not table_names:
+            return []
+        target_lower = {t.lower() for t in table_names if t}
+        stmt = (
+            select(KnowledgeVectorChunkModel, KnowledgeDocumentModel)
+            .join(KnowledgeDocumentModel, KnowledgeVectorChunkModel.document_id == KnowledgeDocumentModel.id)
+            .where(KnowledgeDocumentModel.category == "db_schema")
+        )
+        if connection_id:
+            stmt = stmt.where(
+                KnowledgeDocumentModel.metadata_["connection_id"].astext == str(connection_id)
+            )
+        rows = (await self.session.execute(stmt)).all()
+        results: List[DocumentChunk] = []
+        for chunk_model, doc_model in rows:
+            meta = chunk_model.metadata_ or doc_model.metadata_ or {}
+            t_name = str(meta.get("table_name", "")).strip().lower()
+            if t_name in target_lower:
+                results.append(
+                    DocumentChunk(
+                        id=str(chunk_model.id),
+                        document_id=str(chunk_model.document_id),
+                        chunk_index=chunk_model.chunk_index,
+                        chunk_text=chunk_model.chunk_text,
+                        metadata=meta,
+                        similarity_score=0.92
+                    )
+                )
+        return results
 
     async def search_dynamic_knowledge_rules(
         self,

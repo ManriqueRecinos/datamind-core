@@ -250,6 +250,10 @@ class ManageConnectionsUseCase:
 
         adapter = self._build_adapter(conn_model)
         all_tables = await adapter.introspect_schema()
+        try:
+            routines = await adapter.introspect_routines()
+        except Exception:
+            routines = []
 
         schemas_map: Dict[str, int] = {}
         for t in all_tables:
@@ -278,6 +282,10 @@ class ManageConnectionsUseCase:
 
         adapter = self._build_adapter(conn_model)
         all_tables = await adapter.introspect_schema()
+        try:
+            routines = await adapter.introspect_routines()
+        except Exception:
+            routines = []
         synced_set = {t.lower() for t in (conn_model.synced_tables or [])}
         allowed_schemas = set(s.lower() for s in (conn_model.selected_schemas or [])) if conn_model.selected_schemas else None
 
@@ -312,7 +320,9 @@ class ManageConnectionsUseCase:
             "connection": self._serialize_connection(conn_model),
             "total_tables": len(enriched_tables),
             "vectorized_count": len(synced_set),
-            "tables": enriched_tables
+            "tables": enriched_tables,
+            "total_routines": len(routines),
+            "routines": routines,
         }
 
     @staticmethod
@@ -401,6 +411,10 @@ class ManageConnectionsUseCase:
 
         adapter = self._build_adapter(conn_model)
         all_tables = await adapter.introspect_schema()
+        try:
+            routines = await adapter.introspect_routines()
+        except Exception:
+            routines = []
         wanted_lower = {t.strip().lower() for t in selected_tables if t.strip()}
         matched_tables = [t for t in all_tables if t["table_name"].lower() in wanted_lower]
 
@@ -505,6 +519,92 @@ class ManageConnectionsUseCase:
             username=conn_model.username,
             password=conn_model.password
         )
+
+    @staticmethod
+    def build_routine_embedding_text(
+        conn_name: str,
+        engine_label: str,
+        database_name: str,
+        routine: Dict[str, Any],
+    ) -> str:
+        """Construye el documento semántico para vectorizar una función o procedimiento almacenado."""
+        r_name = routine["routine_name"]
+        r_type = routine.get("routine_type", "FUNCTION")
+        s_name = routine.get("schema_name") or "default"
+        params = routine.get("parameters") or "N/A"
+        ret = routine.get("return_type") or "void"
+        comment = routine.get("comment") or ""
+        definition = routine.get("definition") or ""
+
+        lines = [
+            f"Conexión: {conn_name} ({engine_label} - BD: {database_name})",
+            f"Tipo: {r_type} | Esquema: {s_name} | Nombre: {r_name}",
+            f"Parámetros: {params}",
+            f"Retorno: {ret}",
+        ]
+        if comment:
+            lines.append(f"Descripción: {comment}")
+        if definition:
+            lines.append(f"Definición SQL:\n{definition}")
+        return "\n".join(lines)
+
+    async def vectorize_routines(
+        self,
+        connection_id: str,
+        selected_routines: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Vectoriza funciones y procedimientos almacenados de la conexión en pgvector."""
+        conn_uuid = uuid.UUID(str(connection_id))
+        conn_model = await self.session.get(DatabaseConnectionModel, conn_uuid)
+        if not conn_model:
+            raise ValueError(f"No se encontró la conexión con ID {connection_id}")
+
+        adapter = self._build_adapter(conn_model)
+        all_routines = await adapter.introspect_routines()
+        if selected_routines:
+            wanted = {r.strip().lower() for r in selected_routines if r.strip()}
+            matched = [r for r in all_routines if r["routine_name"].lower() in wanted]
+        else:
+            matched = all_routines
+
+        engine_label = "PostgreSQL" if adapter.is_postgres else "MariaDB/MySQL"
+        vectorized: List[str] = []
+
+        for routine in matched:
+            r_name = routine["routine_name"]
+            r_type = routine.get("routine_type", "FUNCTION")
+            s_name = routine.get("schema_name") or ("public" if adapter.is_postgres else "default")
+            content = self.build_routine_embedding_text(
+                conn_name=conn_model.name,
+                engine_label=engine_label,
+                database_name=conn_model.database_name,
+                routine=routine,
+            )
+            await self.ingest_use_case.execute(
+                title=f"[{conn_model.database_name}] {r_type}: {r_name}",
+                category="db_routine",
+                department=conn_model.name,
+                content=content,
+                metadata={
+                    "connection_id": str(conn_model.id),
+                    "connection_name": conn_model.name,
+                    "engine": conn_model.engine,
+                    "database_name": conn_model.database_name,
+                    "schema_name": s_name,
+                    "routine_name": r_name,
+                    "routine_type": r_type,
+                    "return_type": routine.get("return_type", ""),
+                    "parameters": routine.get("parameters", ""),
+                },
+            )
+            vectorized.append(r_name)
+
+        return {
+            "status": "vectorized",
+            "connection_id": str(conn_model.id),
+            "vectorized_routines": vectorized,
+            "total_vectorized": len(vectorized),
+        }
 
     @staticmethod
     def _serialize_connection(conn: DatabaseConnectionModel) -> Dict[str, Any]:

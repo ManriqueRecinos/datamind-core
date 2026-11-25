@@ -192,3 +192,14 @@ class UnresolvedQueryTermModel(Base):
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
+
+
+class KnowledgeConceptModel(Base):
+    """Catálogo de conceptos/dominios de negocio para clasificar aprendizajes RAG."""
+    __tablename__ = "knowledge_concepts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    short_name = Column(String(50), nullable=False, unique=True, index=True)
+    long_name = Column(String(150), nullable=False)
+    description = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
