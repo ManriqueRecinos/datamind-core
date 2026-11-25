@@ -62,9 +62,11 @@ class NvidiaNimAdapter:
             "model": self.model,
             "messages": messages,
             "stream": stream,
-            "max_tokens": max_tokens or 1024,
+            "max_tokens": max_tokens or 2048,
             "temperature": 0.5 if temperature is None else temperature,
         }
+        if "nemotron" in (self.model or "").lower():
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
 
     @staticmethod

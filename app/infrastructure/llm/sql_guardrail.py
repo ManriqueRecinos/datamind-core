@@ -1,7 +1,7 @@
 """Validador y guardrail de seguridad para sentencias SQL generadas por la IA."""
 
 import re
-from typing import Tuple
+from typing import Optional, Set, Tuple
 import sqlglot
 from sqlglot import exp
 
@@ -55,7 +55,12 @@ class SQLGuardrail:
 
         return raw_text.strip()
 
-    def validate_and_sanitize(self, raw_sql: str, dialect: str = "mysql") -> Tuple[bool, str, str]:
+    def validate_and_sanitize(
+        self,
+        raw_sql: str,
+        dialect: str = "mysql",
+        allowed_tables: Optional[Set[str]] = None,
+    ) -> Tuple[bool, str, str]:
         """
         Valida que la consulta sea estrictamente un SELECT y fuerza la cláusula LIMIT.
         Soporta dialectos 'mysql' (MariaDB/MySQL) y 'postgres' (PostgreSQL).
@@ -85,6 +90,17 @@ class SQLGuardrail:
         for forbidden in self.FORBIDDEN_EXPRESSIONS:
             if parsed.find(forbidden):
                 return False, "", f"Operación prohibida detectada: {forbidden.__name__}."
+
+        # Validar allowlist de tablas vectorizadas (si se proporciona)
+        if allowed_tables is not None:
+            allowed_lower = {t.lower() for t in allowed_tables}
+            for tbl in parsed.find_all(exp.Table):
+                if tbl.name and tbl.name.lower() not in allowed_lower:
+                    return (
+                        False,
+                        "",
+                        f"Acceso denegado a la tabla '{tbl.name}': solo se permiten tablas vectorizadas.",
+                    )
 
         # Inspeccionar o forzar la cláusula LIMIT
         limit_exp = parsed.args.get("limit")

@@ -4,6 +4,7 @@ import logging
 from typing import AsyncIterator, List, Optional
 
 from app.core.config import get_settings
+from app.infrastructure.llm.gemini_adapter import GeminiAdapter, GeminiError
 from app.infrastructure.llm.nvidia_nim_adapter import NvidiaNimAdapter, NvidiaNimError
 from app.infrastructure.llm.ollama_adapter import OllamaAdapter
 
@@ -30,10 +31,10 @@ class HybridLLMClient:
     ) -> str:
         try:
             return await self.text_client.generate_completion(prompt, system_prompt, max_tokens, temperature)
-        except NvidiaNimError as exc:
+        except (NvidiaNimError, GeminiError) as exc:
             if not self.fallback:
                 raise
-            logger.warning("NVIDIA NIM falló (%s); usando Ollama como respaldo.", exc)
+            logger.warning("Proveedor LLM remoto falló (%s); usando Ollama como respaldo.", exc)
             return await self.embedding_client.generate_completion(prompt, system_prompt, max_tokens, temperature)
 
     async def stream_completion(
@@ -44,12 +45,19 @@ class HybridLLMClient:
 
 
 def get_llm_client():
-    """Devuelve OllamaAdapter (por defecto) o el cliente híbrido NVIDIA + Ollama."""
+    """Devuelve OllamaAdapter (por defecto) o el cliente híbrido NVIDIA/Gemini + Ollama."""
     settings = get_settings()
-    if (settings.llm_provider or "ollama").lower() == "nvidia":
+    provider = (settings.llm_provider or "ollama").lower()
+    if provider == "nvidia":
         return HybridLLMClient(
             text_client=NvidiaNimAdapter(),
             embedding_client=OllamaAdapter(),
             fallback=settings.nvidia_fallback_to_ollama,
+        )
+    if provider == "gemini":
+        return HybridLLMClient(
+            text_client=GeminiAdapter(),
+            embedding_client=OllamaAdapter(),
+            fallback=settings.gemini_fallback_to_ollama,
         )
     return OllamaAdapter()
