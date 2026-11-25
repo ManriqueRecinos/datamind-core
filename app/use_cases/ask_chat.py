@@ -278,9 +278,17 @@ class AskChatUseCase:
 
         # 1. Clasificar intención y detectar explícitamente qué formato solicitó el usuario
         intent = IntentClassifier.classify(prompt)
+        if intent == "general_chat" and connection_id and len(prompt.strip().split()) > 3:
+            intent = "data_query"
         output_fmt = IntentClassifier.detect_output_format(prompt)
         wants_chart = bool(output_fmt["wants_chart"])
         wants_table = bool(output_fmt["wants_table"])
+        if not wants_table and re.search(
+            r"\b(listado|lista|cu[aá]les\s+|dame\s+\d+|dame\s+las|dame\s+los|mu[eé]strame\s+|ver\s+las|ver\s+los|primeras?\s+\d+|primeros?\s+\d+|detalle\s+de)\b",
+            prompt,
+            re.IGNORECASE,
+        ):
+            wants_table = True
         preferred_chart_type = str(output_fmt["preferred_chart_type"])
         generated_sql = None
         dataset_id = None
@@ -303,6 +311,23 @@ class AskChatUseCase:
         prev_asst_msg = (await self.session.execute(prev_asst_stmt)).scalars().first()
         prev_asst_content = prev_asst_msg.content if prev_asst_msg else None
         prev_asst_sql = prev_asst_msg.generated_sql if prev_asst_msg else None
+
+        # Obtener últimos 6 mensajes de la sesión para memoria conversacional
+        hist_stmt = (
+            select(ChatMessageModel)
+            .where(ChatMessageModel.session_id == s_id)
+            .order_by(ChatMessageModel.created_at.desc())
+            .limit(6)
+        )
+        hist_msgs = list(reversed((await self.session.execute(hist_stmt)).scalars().all()))
+        recent_history_block = ""
+        if hist_msgs:
+            hist_lines = []
+            for hm in hist_msgs:
+                who = "Usuario" if hm.role == "user" else "Asistente"
+                snippet = (hm.content or "").strip().replace("\n", " ")[:300]
+                hist_lines.append(f"- {who}: {snippet}")
+            recent_history_block = "HISTORIAL RECIENTE DE LA CONVERSACIÓN:\n" + "\n".join(hist_lines) + "\n\n"
 
         # Verificar si en la misma sesión existe un dataset reciente y el usuario está respondiendo
         # con qué campos crear el gráfico (flujo conversacional en 2 pasos — Opción A)
@@ -536,10 +561,13 @@ class AskChatUseCase:
                 "explícale conceptualmente lo que sabes y recuérdale con amabilidad que para ejecutar consultas "
                 "SQL en vivo debe seleccionar una base de datos conectada o iniciar sesión.\n"
                 "- Redacta en español formal, claro y profesional, con formato Markdown (encabezados `###`, "
-                "listas `-` y conceptos clave en **negritas**).\n\n"
-                f"CONTEXTO GLOBAL DE CONOCIMIENTO:\n{context}"
+                "listas `-` y conceptos clave en **negritas**).\n"
+                "- REGLA ESTRICTA E INQUEBRANTABLE DE CONFIDENCIALIDAD: JAMÁS menciones el nombre de la base de datos (ej. 'bd_suma', 'enterprise_rag'), ni el motor de base de datos, ni muestres consultas SQL, bloques de código SQL, nombres físicos de tablas ni nombres técnicos de columnas en tu respuesta al usuario.\n\n"
+                f"CONTEXTO GLOBAL DE CONOCIMIENTO:\n{context}\n\n{recent_history_block}"
             )
             message_text = await self.ollama.generate_completion(prompt=prompt, system_prompt=sys_prompt)
+            if message_text:
+                message_text = re.sub(r"`?\b(bd_suma|enterprise_rag)\b`?", "el sistema", message_text, flags=re.IGNORECASE)
 
         elif intent == "data_query":
             # 0. Si la petición incluye archivos adjuntos cargados en la sesión, consultar DuckDB localmente
@@ -753,6 +781,39 @@ class AskChatUseCase:
                         connection_id=target_conn_id
                     )
 
+                    # 2.05 Garantizar que toda tabla usada en un sql_example o custom_relation recuperado
+                    # tenga su esquema real en schema_chunks para que el LLM no invente nombres de columnas
+                    if learned_rule_chunks:
+                        existing_schema_tables = {
+                            str((ch.metadata or {}).get("table_name", "")).lower()
+                            for ch in (schema_chunks or [])
+                        }
+                        tables_from_rules: set[str] = set()
+                        for r_ch in learned_rule_chunks:
+                            r_meta = r_ch.metadata or {}
+                            for rt in (r_meta.get("related_tables") or []):
+                                if rt:
+                                    tables_from_rules.add(str(rt).lower())
+                            sql_ex = r_meta.get("sql_query") or ""
+                            if sql_ex:
+                                try:
+                                    import sqlglot
+                                    from sqlglot import exp as sg_exp
+                                    parsed_rule_sql = sqlglot.parse_one(sql_ex, read=sql_dialect)
+                                    for tbl_node in parsed_rule_sql.find_all(sg_exp.Table):
+                                        if tbl_node.name:
+                                            tables_from_rules.add(tbl_node.name.lower())
+                                except Exception:
+                                    pass
+                        missing_rule_tables = tables_from_rules - existing_schema_tables
+                        if missing_rule_tables:
+                            extra_schemas = await self.vector_repo.get_schema_chunks_by_table_names(
+                                table_names=list(missing_rule_tables),
+                                connection_id=target_conn_id
+                            )
+                            if extra_schemas:
+                                schema_chunks = list(schema_chunks or []) + extra_schemas
+
                     # 2.1 Recuperación de directivas aprendidas dinámicamente si el feature flag está activo
                     dynamic_rules: List[Dict[str, Any]] = []
                     dynamic_rules_applied: List[Dict[str, Any]] = []
@@ -818,7 +879,7 @@ class AskChatUseCase:
                         f"ESQUEMAS DE TABLAS Y RELACIONES VECTORIZADOS DISPONIBLES EN `{db_name}`:\n{schema_context}{joins_summary}{rules_summary}{dynamic_rules_block}\n\n"
                         f"REGLAS OBLIGATORIAS DE ANÁLISIS RELACIONAL Y GRÁFICOS:\n"
                         f"- Usa únicamente las tablas y columnas listadas en los esquemas.\n"
-                        f"- PROHIBICIÓN ESTRICTA DE SEGURIDAD: NUNCA incluyas en el SELECT columnas que almacenen contraseñas, tokens de autenticación o secretos (ej: password, remember_token, gotify_pass, gotify_app_token, api_token, secret, hash, salt).\n"
+                        f"- PROHIBICIÓN ESTRICTA DE SEGURIDAD Y DE IDs TÉCNICOS: NUNCA incluyas en el SELECT columnas que almacenen contraseñas, tokens o secretos, NI TAMPOCO llaves primarias o foráneas numéricas (como `id_op`, `id_cliente`, `id_estilo`, `id_coleccion`, `id_usuario`, `id_supervisor`, `id_ubicacion`, `id_tipo_empaque`, `id_px`). Úsalas únicamente en JOINs o WHERE.\n"
                         f"- SOPORTE MULTI-ESQUEMA: Si la tabla contiene prefijo de esquema (ej: `produccion.ordenes`, `inventario.items`, `hop.registro`), SIEMPRE califica el nombre completo en `FROM` y `JOIN` con su esquema exacto (ej. `FROM produccion.ordenes`). Para tablas del esquema `public`, puedes usar `public.tabla` o `tabla`.\n"
                         f"- APLICA ESTRICTAMENTE las REGLAS DE NEGOCIO, DICCIONARIO Y EJEMPLOS SQL ENSEÑADOS POR EL USUARIO si aparecen arriba.\n"
                         f"- SI EXISTEN <<<DIRECTIVAS_APRENDIDAS>>>, APLÍCALAS DE FORMA OBLIGATORIA Y PRIORITARIA en las cláusulas WHERE y filtros correspondientes.\n"
@@ -826,18 +887,24 @@ class AskChatUseCase:
                         f"- Si el usuario menciona dos o más tablas o entidades vinculadas/relacionadas, realiza el `JOIN` correspondiente e incluye en el `SELECT` las columnas descriptivas (nombres, estados, tipos, fechas) y numéricas (cantidades, pesos, totales) de ambas tablas para poder analizarlas y graficarlas con datos exactos.\n"
                         f"- Si el usuario pide un gráfico o análisis sin especificar una sola columna, selecciona múltiples columnas relevantes de las tablas involucradas (en lugar de un simple `COUNT(*)` de 1 sola fila) para que el usuario pueda elegir con qué campos construir su gráfico.\n"
                         f"- Si el usuario pregunta si tienes conocimiento de una tabla o qué datos contiene, genera una consulta SELECT sencilla como `SELECT * FROM <tabla> LIMIT 20;`.\n"
+                        f"- IDENTIFICACIÓN INTELIGENTE DE ÓRDENES DE PRODUCCIÓN (`op.op`): Cuando el usuario mencione un código con prefijo `OTS-...`, `OT-...`, `OP-...` (ej. `OTS-150275`, `OT-1611512`) o un número de orden solo o agrupado por espacios (ej. `95652`, `97498`, `0001`, `41252 41253 41504`, `98329 98342 98434`), ese valor corresponde SIEMPRE a la columna `op.op` de la tabla `op` (NO a `op.id_op`). Si el usuario proporciona un código exacto con prefijo (como `OTS-150275`), filtra con `op.op = 'OTS-150275'`; si proporciona solo un número (como `95652` o `41252`), dado que existen OPs anidadas/agrupadas cuyos nombres contienen varios números separados por espacio (ej. `'41252 41253 41504'`), filtra usando `(op.op = '41252' OR op.op LIKE '%41252%')` para encontrarla tanto si es individual como si forma parte de una OP agrupada.\n"
                         f"- Respeta estrictamente la sintaxis de {engine_title}.\n\n"
-                        f"SOLICITUD: {prompt}\n"
+                        + recent_history_block
+                        + (f"SQL DEL TURNO ANTERIOR (si la solicitud actual refina o filtra el resultado previo, conserva sus filtros): {prev_asst_sql}\n\n" if prev_asst_sql else "")
+                        + f"SOLICITUD: {prompt}\n"
                         f"CONSULTA SQL:"
                     )
                     raw_sql = await self.ollama.generate_completion(
                         prompt=sql_prompt,
-                        max_tokens=300,
+                        max_tokens=2048,
                         temperature=0.0
                     )
                     # Validar SQL inicial o pasar por reparación si el guardrail o el modelo fallaron
                     repair_agent = SqlRepairAgent(ollama=self.ollama, guardrail=self.guardrail)
-                    is_valid, safe_sql, error_msg = self.guardrail.validate_and_sanitize(raw_sql, dialect=sql_dialect)
+                    allowed_set = set(synced_tbls) if synced_tbls else None
+                    is_valid, safe_sql, error_msg = self.guardrail.validate_and_sanitize(
+                        raw_sql, dialect=sql_dialect, allowed_tables=allowed_set
+                    )
 
                     sql_to_execute = safe_sql if is_valid else None
                     execution_success = False
@@ -909,23 +976,23 @@ class AskChatUseCase:
                             pass
 
                         message_text = (
-                            f"He analizado los esquemas de la base de datos `{db_name}`, pero no pude generar una consulta "
-                            f"exacta para responder a tu solicitud sin ambigüedades.\n\n"
-                            f"💡 **Sugerencia**: Intenta especificar con mayor claridad el nombre de la tabla o columnas que deseas consultar "
-                            f"(ejemplo: *\"muéstrame los primeros 10 registros de la tabla {schema_chunks[0].metadata.get('table_name', 'principal') if schema_chunks else 'principal'}\"*)."
+                            "He analizado la información disponible en el sistema, pero no pude procesar tu solicitud "
+                            "con total precisión en este momento.\n\n"
+                            "💡 **Sugerencia**: Intenta especificar con mayor claridad el dato o criterio de negocio que deseas consultar "
+                            "(por ejemplo, el número exacto de la Orden de Producción, el cliente o la etapa del proceso)."
                         )
                     else:
                         row_count = len(rows)
 
                         if row_count > 0:
-                            has_tabular_data = True
+                            has_tabular_data = bool(wants_chart or wants_table)
                             dataset_id = f"ds_{uuid.uuid4().hex[:12]}"
 
                             # Feature 007: Purgar datos sensibles y humanizar columnas para negocio
                             raw_columns = list(rows[0].keys())
                             human_cols, sanitized_rows, _ = DataHumanizer.sanitize_and_humanize(raw_columns, rows)
                             columns_list = human_cols
-                            preview_rows = sanitized_rows[:10]
+                            preview_rows = sanitized_rows
 
                             # Guardar dataset en caché para botón de Excel y Constructor de Gráficos (limpio y sin passwords)
                             dataset_model = QueryDatasetModel(
@@ -941,21 +1008,26 @@ class AskChatUseCase:
                             await self.session.commit()
 
                             # Analizar columnas y determinar si requiere selección guiada de campos (Opción A)
-                            chart_config = self.analyze_columns_for_chart(
-                                columns=columns_list,
-                                rows=sanitized_rows,
-                                wants_chart=wants_chart,
-                                wants_table=wants_table,
-                                preferred_type=preferred_chart_type,
-                                prompt=prompt
+                            chart_config = (
+                                self.analyze_columns_for_chart(
+                                    columns=columns_list,
+                                    rows=sanitized_rows,
+                                    wants_chart=wants_chart,
+                                    wants_table=wants_table,
+                                    preferred_type=preferred_chart_type,
+                                    prompt=prompt
+                                )
+                                if wants_chart
+                                else None
                             )
 
-                            sample_preview = json.dumps(sanitized_rows[:5], ensure_ascii=False)
+                            sample_limit = 35 if row_count <= 40 else 15
+                            sample_preview = json.dumps(sanitized_rows[:sample_limit], ensure_ascii=False)
                             chart_instruction = ""
-                            dims_str = ", ".join([f"`{c}`" for c in chart_config["dimension_columns"][:8]]) or "ninguna"
-                            metrics_str = ", ".join([f"`{c}`" for c in chart_config["metric_columns"][:8]]) or "conteo de registros (`COUNT`)"
 
-                            if chart_config.get("needs_field_selection") and wants_chart:
+                            if chart_config and chart_config.get("needs_field_selection") and wants_chart:
+                                dims_str = ", ".join([f"`{c}`" for c in chart_config["dimension_columns"][:8]]) or "ninguna"
+                                metrics_str = ", ".join([f"`{c}`" for c in chart_config["metric_columns"][:8]]) or "conteo de registros (`COUNT`)"
                                 chart_instruction = (
                                     f"\nIMPORTANTE (FLUJO GUIADO DE GRÁFICOS):\n"
                                     f"- Ya analizaste los registros, obteniendo los siguientes campos:\n"
@@ -975,25 +1047,28 @@ class AskChatUseCase:
                                 f"Pregunta del colaborador: {prompt}\n"
                                 f"Total de registros recuperados: {row_count}.\n"
                                 f"Muestra representativa de los datos de negocio: {sample_preview}\n\n"
-                                f"DIRECTIVAS ESTRICTAS DE COMUNICACIÓN CON EL USUARIO:\n"
-                                f"1. Habla 100% en términos humanos de procesos y negocios. NUNCA menciones nombres físicos de tablas (como 'users', 'company_user', 'companies', 'hop'), ni nombres de base de datos, ni la sentencia SQL ejecutada.\n"
-                                f"2. Refiérete a los datos como 'los usuarios registrados', 'las empresas asociadas' o 'la información consultada'.\n"
+                                f"DIRECTIVAS ESTRICTAS E INQUEBRANTABLES DE CONFIDENCIALIDAD Y COMUNICACIÓN:\n"
+                                f"1. PROHIBICIÓN CRÍTICA DE BASE DE DATOS Y ESQUEMAS: JAMÁS menciones bajo ninguna circunstancia el nombre de la base de datos (ej. '{db_name}'), ni el motor de base de datos, ni nombres físicos de tablas, ni nombres técnicos de columnas o llaves primarias/foráneas, ni la sentencia SQL ejecutada.\n"
+                                f"2. Habla 100% en términos humanos de procesos y negocios. Refiérete a la fuente como 'el sistema' o 'los registros operativos'.\n"
                                 f"3. Redacta una respuesta ejecutiva, amable y directa de máximo 2 párrafos concisos destacando los puntos más importantes.{chart_instruction}"
                             )
                             try:
                                 message_text = await self.ollama.generate_completion(
                                     prompt=synthesis_prompt,
-                                    max_tokens=220,
+                                    max_tokens=1200,
                                     temperature=0.2
                                 )
                             except Exception as synth_err:
                                 message_text = (
-                                    f"Se consultó exitosamente la base de datos `{db_name}` y se recuperaron **{row_count} registros** "
-                                    f"mediante la consulta SQL ejecutada.\n\n"
+                                    f"Se consultó exitosamente la información del sistema y se recuperaron **{row_count} registros**.\n\n"
                                     f"Puedes explorar los datos completos en la tabla interactiva de abajo o exportarlos directamente a Excel (.xlsx)."
                                 )
                         else:
-                            message_text = f"Se consultó la base de datos `{db_name}` ({engine_title}) pero no se encontraron registros que coincidan con los criterios solicitados."
+                            message_text = "Se consultó la información en el sistema, pero no se encontraron registros que coincidan con los criterios solicitados."
+
+                    # Guardrail post-generación: asegurar que jamás se filtre el nombre físico de la base de datos
+                    if db_name and message_text:
+                        message_text = re.sub(rf"`?{re.escape(str(db_name))}`?", "el sistema", message_text, flags=re.IGNORECASE)
 
         latency = int((time.time() - start_time) * 1000)
 

@@ -3,9 +3,9 @@
 import re
 from typing import Any, Dict, List, Set, Tuple
 
-# Patrón estricto de columnas sensibles que NUNCA deben mostrarse ni exponerse
+# Patrón estricto de columnas sensibles o IDs técnicos internos que NUNCA deben mostrarse ni exponerse al usuario
 SENSITIVE_COLUMN_PATTERN = re.compile(
-    r"(?i)(password|passwd|pass|token|secret|hash|salt|remember_token|auth_key|private_key)"
+    r"(?i)(password|passwd|pass|token|secret|hash|salt|remember_token|auth_key|private_key|^id$|^id_[a-z0-9_]+$|[a-z0-9_]+_id$)"
 )
 
 # Diccionario maestro de traducción de identificadores técnicos a lenguaje corporativo
@@ -122,8 +122,19 @@ ENTITY_LEMMA_MAP: Dict[str, str] = {
     "ecosystems": "ecosystems",
     "interfaz": "interfaces",
     "interfaces": "interfaces",
-    "interface": "interfaces"
+    "interface": "interfaces",
+
+    # Órdenes de Producción (OP / OTS / OT)
+    "op": "op",
+    "ops": "op",
+    "ots": "op",
+    "ot": "op",
 }
+
+# Patrón de códigos de Orden de Producción (ej. OTS-150275, OT-1611512, OP-12345, o códigos numéricos de OP como 95652, 161855)
+OP_CODE_PATTERN = re.compile(
+    r"(?i)\b(?:OTS|OT|OP)[-\s]?\d{3,10}\b|\b\d{4,8}(?:\s+\d{4,8})+\b"
+)
 
 
 class DataHumanizer:
@@ -209,6 +220,17 @@ class DataHumanizer:
 
         clean_prompt = prompt_text.lower()
         synced_lower_set = {t.lower() for t in synced_table_names}
+
+        # 0. Detección inteligente de códigos de Orden de Producción (OTS-150275, OT-1605332, "95652", "41252 41253", etc.)
+        if "op" in synced_lower_set:
+            if OP_CODE_PATTERN.search(prompt_text):
+                return True, "op"
+            # Si el usuario menciona un número de 4 a 8 dígitos (ej. "de la 95652", "la 97498", "op 0001") en contexto de producción/lectura/ruta/talla
+            if re.search(r"\b\d{4,8}\b", clean_prompt) and re.search(
+                r"\b(op|ots|ot|orden|operacion|ruta|lectura|paquete|talla|corte|bpt|sdp|planta|ventana|celda|avance|saldo|donde|ubicacion|de\s+la|en\s+la)\b",
+                clean_prompt,
+            ):
+                return True, "op"
 
         # Extraer tokens del prompt
         tokens = re.findall(r"\b[a-zA-ZáéíóúñÁÉÍÓÚÑ_]+\b", clean_prompt)

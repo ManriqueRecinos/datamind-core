@@ -47,7 +47,7 @@ class SqlRepairAgent:
         try:
             raw_repaired_sql = await self.ollama.generate_completion(
                 prompt=repair_prompt,
-                max_tokens=300,
+                max_tokens=2048,
                 temperature=0.0
             )
 

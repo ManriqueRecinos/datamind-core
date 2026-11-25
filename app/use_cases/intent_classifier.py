@@ -91,6 +91,37 @@ SQL_TRIGGER_PATTERNS = [
     r"\bdatos\s+de\b",
     r"\bquien\s+(es|son)\b",
     r"\bquienes\s+tienen\b",
+    # Términos de Producción Textil / SUMA (OP, paqueteo, rutas, operaciones, tallas, corte, BPT, SDP)
+    r"\bop[s]?\b",
+    r"\bot[s]?[-\s]?[a-z0-9]+\b",
+    r"\b\d{4,8}(?:\s+\d{4,8})+\b",
+    r"\b(de\s+la|la|el|orden)\s+\d{4,8}\b",
+    r"\bdonde\s+(esta[n]?|se\s+encuentra[n]?|va[n]?)\b",
+    r"\bubicacion\b",
+    r"\bpaquete[s]?\b",
+    r"\bpaqueteo\b",
+    r"\bruta[s]?\b",
+    r"\boperacion(es)?\b",
+    r"\btalla[s]?\b",
+    r"\bdesglose\b",
+    r"\bcortad[oa]s?\b",
+    r"\bcorte\b",
+    r"\btrazad[oa]s?\b",
+    r"\btrazo[s]?\b",
+    r"\bpedid[oa]s?\b",
+    r"\bbaja[s]?\b",
+    r"\bplanta[s]?\b",
+    r"\bbpt\b",
+    r"\bsdp\b",
+    r"\bcelda[s]?\b",
+    r"\bsticker[s]?\b",
+    r"\blectura[s]?\b",
+    r"\bavance[s]?\b",
+    r"\bsaldo[s]?\b",
+    r"\bmovimiento[s]?\b",
+    r"\bestilo[s]?\b",
+    r"\bcoleccion(es)?\b",
+    r"\bvariante[s]?\b",
 ]
 
 CHART_TRIGGER_PATTERNS = [
@@ -116,7 +147,9 @@ TABLE_TRIGGER_PATTERNS = [
     r"\b(dame|muestrame|traeme|ver)\s+(la\s+)?data\b",
     r"\bdata\s+de\b",
     r"\b(exporta(r)?|descarga(r)?|baja(r)?)\s+(a\s+|en\s+)?(excel|csv|archivo)\b",
-    r"\b(muestrame|dame|traeme|ver)\s+(todos?\s+)?(los\s+|las\s+)?(registros|filas)\b",
+    r"\b(muestrame|dame|traeme|ver)\s+(todos?\s+)?(los\s+|las\s+)?(registros|filas|desglose|resumen|listado|movimientos|lecturas|avance|paquetes)\b",
+    r"\bdesglose\b",
+    r"\bdonde\s+(esta[n]?|se\s+encuentra[n]?|va[n]?)\b",
 ]
 
 GREETING_PATTERNS = [
