@@ -129,6 +129,43 @@ ENTITY_LEMMA_MAP: Dict[str, str] = {
     "ops": "op",
     "ots": "op",
     "ot": "op",
+    "paquete": "op",
+    "paquetes": "op",
+    "sticker": "op",
+    "stickers": "op",
+    "celda": "celda",
+    "celdas": "celda",
+}
+
+# Diccionario de humanización para tablas o entidades de negocio en mensajes de ambigüedad
+BUSINESS_ENTITY_DICTIONARY: Dict[str, str] = {
+    "op": "Órdenes de Producción",
+    "estado_op_paquete": "Movimientos y Paquetes de Producción",
+    "lectura_produccion": "Lecturas Operativas de Producción",
+    "celda": "Celdas de Producción",
+    "areas": "Áreas / Plantas de Producción",
+    "sub_areas": "Subáreas de Planta",
+    "operaciones": "Operaciones y Procesos",
+    "operaciones_por_ruta": "Rutas y Operaciones",
+    "rutas": "Rutas de Producción",
+    "tallas": "Catálogo de Tallas",
+    "cantidad_tallas_op": "Cantidades por Talla de la OP",
+    "cantidad_tallas_pedidas_op": "Cantidades Pedidas por Talla",
+    "tallas_op_bajas": "Registro de Bajas / Mermas de Talla",
+    "tallas_op_bajas_operacion": "Bajas de Talla por Operación",
+    "sticker": "Stickers de Paquete",
+    "sticker_en_ventana": "Stickers en Ventana",
+    "users": "Usuarios del Sistema",
+    "usuario": "Usuarios Operativos",
+    "roles": "Roles de Usuario",
+    "permissions": "Permisos del Sistema",
+    "companies": "Empresas",
+    "empresa": "Empresas / Plantas",
+    "inventario_partes": "Inventario de Repuestos",
+    "parte_maquina": "Partes y Repuestos de Maquinaria",
+    "customers": "Clientes",
+    "cliente": "Clientes Comerciales",
+    "estilo": "Estilos de Prenda",
 }
 
 # Patrón de códigos de Orden de Producción (ej. OTS-150275, OT-1611512, OP-12345, o códigos numéricos de OP como 95652, 161855)
@@ -146,6 +183,22 @@ class DataHumanizer:
         if not column_name:
             return False
         return bool(SENSITIVE_COLUMN_PATTERN.search(column_name.strip()))
+
+    @staticmethod
+    def humanize_entity(table_name: str) -> str:
+        """Traduce un nombre técnico de tabla a una descripción de negocio legible sin exponer nombres físicos."""
+        if not table_name:
+            return ""
+        clean_key = table_name.strip().lower()
+        if clean_key in BUSINESS_ENTITY_DICTIONARY:
+            return BUSINESS_ENTITY_DICTIONARY[clean_key]
+
+        cleaned = re.sub(r"^(tbl_|tb_|cat_|mae_|dim_|user_|company_)", "", clean_key)
+        if cleaned in BUSINESS_ENTITY_DICTIONARY:
+            return BUSINESS_ENTITY_DICTIONARY[cleaned]
+
+        words = cleaned.replace("_", " ").split()
+        return " ".join([w.capitalize() if w.lower() not in ("de", "del", "la", "el", "en", "y", "por", "para") else w for w in words])
 
     @staticmethod
     def humanize_label(col_name: str) -> str:

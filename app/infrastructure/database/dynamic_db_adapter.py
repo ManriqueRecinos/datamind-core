@@ -366,8 +366,8 @@ class DynamicDBAdapter(RelationalDbInterface):
         al hacer JOIN en lugar de mostrar IDs numéricos en los gráficos.
         """
         priority_patterns = [
-            r"\b(nombre|name|razon_social|denominacion|alias)\b",
-            r"\b(descripcion|description|titulo|title|detalle|etiqueta|label)\b",
+            r"\b(nom|nomb|nombre|name|razon_social|denominacion|alias)\b",
+            r"\b(desc|descrip|descripcion|description|titulo|title|detalle|etiqueta|label)\b",
             r"\b(codigo|code|clave|sku|referencia|sigla)\b",
             r"\b(estado|status|tipo|type|categoria|category|departamento|proceso)\b",
         ]
