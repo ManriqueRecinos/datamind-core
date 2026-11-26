@@ -369,15 +369,17 @@ class VectorRepository:
         user_id: str,
         connection_id: Optional[str] = None,
         top_k: int = 3,
-        similarity_threshold: float = 0.75
+        similarity_threshold: float = 0.75,
+        exclude_categories: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recupera reglas activas de aprendizaje implícito (scope global o scope user del usuario actual).
         Exige status='verified' para global o status in ('candidate', 'verified') para user.
-        Filtra por umbral de similitud coseno con prefijo search_query.
+        Filtra por umbral de similitud coseno con prefijo search_query y excluye db_schema por defecto.
         """
         distance = KnowledgeVectorChunkModel.embedding.cosine_distance(query_embedding)
-        
+        excluded = ["db_schema"] if exclude_categories is None else exclude_categories
+
         stmt = (
             select(KnowledgeVectorChunkModel, KnowledgeDocumentModel, distance.label("distance"))
             .join(KnowledgeDocumentModel, KnowledgeVectorChunkModel.document_id == KnowledgeDocumentModel.id)
@@ -391,6 +393,8 @@ class VectorRepository:
                 )
             )
         )
+        if excluded:
+            stmt = stmt.where(KnowledgeDocumentModel.category.notin_(excluded))
         if connection_id:
             try:
                 conn_uuid = uuid.UUID(str(connection_id))
@@ -408,6 +412,7 @@ class VectorRepository:
                 results.append({
                     "id": str(chunk.id),
                     "title": doc.title,
+                    "category": doc.category,
                     "target_entity": chunk.target_entity,
                     "target_column": chunk.target_column,
                     "prescriptive_condition": chunk.prescriptive_condition,

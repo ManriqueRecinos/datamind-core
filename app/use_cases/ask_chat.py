@@ -2,7 +2,11 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import re
+from fastapi.concurrency import run_in_threadpool
+
+logger = logging.getLogger(__name__)
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 import uuid
@@ -730,13 +734,16 @@ class AskChatUseCase:
                         seen_opts = set()
                         for ch in schema_chunks[:3]:
                             t_n = str((ch.metadata or {}).get("table_name", "")).strip()
-                            t_desc = str((ch.metadata or {}).get("description") or (ch.metadata or {}).get("table_comment") or f"Tabla {t_n}")
+                            human_entity_name = DataHumanizer.humanize_entity(t_n)
+                            raw_desc = str((ch.metadata or {}).get("description") or (ch.metadata or {}).get("table_comment") or f"Información sobre {human_entity_name.lower()}")
+                            # Limpiar cualquier mención a "Tabla " o nombres físicos técnicos
+                            clean_desc = re.sub(r"(?i)\btabla\s+[a-zA-Z0-9_]+\b", f"información de {human_entity_name.lower()}", raw_desc).strip()
                             if t_n and t_n.lower() not in seen_opts:
                                 seen_opts.add(t_n.lower())
                                 options_list.append({
                                     "id": t_n,
-                                    "label": t_n,
-                                    "description": t_desc[:120]
+                                    "label": human_entity_name,
+                                    "description": clean_desc[:120]
                                 })
 
                 # Si es ambiguo y tenemos al menos 2 opciones reales, emitir aclaración en vez de generar SQL
@@ -744,7 +751,7 @@ class AskChatUseCase:
                     resilience_metrics.inc_clarifications_requested()
                     clarification_payload = {
                         "type": "clarification_request",
-                        "question": "Para darte un resultado exacto, ¿a cuál de las siguientes tablas te refieres?",
+                        "question": "Para darte un resultado exacto, ¿a cuál de las siguientes opciones te refieres?",
                         "extracted_term": prompt[:60],
                         "options": options_list,
                         "original_prompt": prompt
@@ -766,9 +773,9 @@ class AskChatUseCase:
                     except Exception as uqt_err:
                         pass
 
-                    options_md = "\n".join([f"- **`{opt['label']}`**: {opt['description']}" for opt in options_list])
+                    options_md = "\n".join([f"- **{opt['label']}**: {opt['description']}" for opt in options_list])
                     message_text = (
-                        f"Para responderte con total precisión, por favor aclárame a cuál de estas entidades te refieres:\n\n"
+                        f"Para responderte con total precisión, por favor aclárame a cuál de estos conceptos te refieres:\n\n"
                         f"{options_md}\n\n"
                         f"*(Puedes hacer clic en una de las opciones interactivas que aparecen a continuación para continuar automáticamente)*"
                     )
@@ -822,18 +829,62 @@ class AskChatUseCase:
                         try:
                             # Vectorizar usando el prefijo de búsqueda para queries
                             query_search_vec = await self.ollama.generate_embedding(f"search_query: {prompt}")
+                            neural_pred = None
+                            try:
+                                from app.infrastructure.ml.trainer import predict_category_from_embedding
+                                neural_pred = await run_in_threadpool(predict_category_from_embedding, query_search_vec)
+                            except Exception as nl_err:
+                                logger.warning("Neural boost deshabilitado para esta consulta: %s", nl_err)
+                            fetch_k = self.settings.knowledge_top_k * 2 if neural_pred else self.settings.knowledge_top_k
                             dynamic_rules = await self.vector_repo.search_dynamic_knowledge_rules(
                                 query_embedding=query_search_vec,
                                 user_id=user_id,
                                 connection_id=target_conn_id,
-                                top_k=self.settings.knowledge_top_k,
+                                top_k=fetch_k,
                                 similarity_threshold=self.settings.knowledge_similarity_threshold
                             )
+                            if dynamic_rules and neural_pred:
+                                pred_cat = neural_pred["predicted_label"].strip().lower()
+                                boost_val = neural_pred["boost"]
+                                shadow = getattr(self.settings, "neural_boost_shadow_mode", True)
+                                boosted_count = 0
+                                top_before = dynamic_rules[0].get("id")
+                                for dr in dynamic_rules:
+                                    raw_sim = float(dr.get("similarity", 0.0))
+                                    dr["similarity_raw"] = raw_sim
+                                    dr_cat = str(dr.get("category") or "").strip().lower()
+                                    if dr_cat == pred_cat:
+                                        dr["similarity_boosted"] = min(1.0, raw_sim + boost_val)
+                                        boosted_count += 1
+                                        if not shadow:
+                                            dr["similarity"] = dr["similarity_boosted"]
+                                    else:
+                                        dr["similarity_boosted"] = raw_sim
+                                simulated_order = sorted(
+                                    dynamic_rules,
+                                    key=lambda x: float(x.get("similarity_boosted", 0.0)),
+                                    reverse=True,
+                                )
+                                top_after = simulated_order[0].get("id") if simulated_order else None
+                                if not shadow:
+                                    dynamic_rules = simulated_order[:self.settings.knowledge_top_k]
+                                else:
+                                    dynamic_rules = dynamic_rules[:self.settings.knowledge_top_k]
+                                logger.info(
+                                    "Neural boost (shadow=%s): cat=%s conf=%s%% boost=%.3f matches=%d top_changed=%s",
+                                    shadow, pred_cat, neural_pred["confidence"], boost_val, boosted_count,
+                                    top_before != top_after
+                                )
                             if dynamic_rules:
                                 lines = []
                                 for dr in dynamic_rules:
                                     dynamic_rules_applied.append({"id": dr["id"], "title": dr["title"]})
-                                    lines.append(f"- Regla para `{dr['target_entity']}` (`{dr['target_column']}`): {dr['prescriptive_condition']}")
+                                    if dr.get("prescriptive_condition"):
+                                        lines.append(
+                                            f"- Regla para `{dr.get('target_entity')}` (`{dr.get('target_column')}`): {dr['prescriptive_condition']}"
+                                        )
+                                    else:
+                                        lines.append(f"- [{dr.get('category', 'regla')}] {dr['title']}: {dr.get('content', '')}")
                                 dynamic_rules_block = (
                                     "\n<<<DIRECTIVAS_APRENDIDAS>>>\n"
                                     + "\n".join(lines)

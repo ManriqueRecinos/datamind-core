@@ -57,14 +57,20 @@ class Settings(BaseSettings):
     mariadb_timeout_seconds: float = Field(default=5.0, alias="MARIADB_TIMEOUT_SECONDS")
 
     # Parámetros RAG y Caché de Datasets
-    chunk_size: int = Field(default=600, alias="CHUNK_SIZE")
-    chunk_overlap: int = Field(default=80, alias="CHUNK_OVERLAP")
+    chunk_size: int = Field(default=500, alias="CHUNK_SIZE")
+    chunk_overlap: int = Field(default=100, alias="CHUNK_OVERLAP")
     dataset_cache_ttl_hours: int = Field(default=2, alias="DATASET_CACHE_TTL_HOURS")
 
     # Aprendizaje Implícito y Memoria Dinámica
-    enable_dynamic_knowledge_injection: bool = Field(default=False, alias="ENABLE_DYNAMIC_KNOWLEDGE_INJECTION")
-    knowledge_similarity_threshold: float = Field(default=0.75, alias="KNOWLEDGE_SIMILARITY_THRESHOLD")
-    knowledge_top_k: int = Field(default=3, alias="KNOWLEDGE_TOP_K")
+    enable_dynamic_knowledge_injection: bool = Field(default=True, alias="ENABLE_DYNAMIC_KNOWLEDGE_INJECTION")
+    knowledge_similarity_threshold: float = Field(default=0.62, alias="KNOWLEDGE_SIMILARITY_THRESHOLD")
+    knowledge_top_k: int = Field(default=12, alias="KNOWLEDGE_TOP_K")
+
+    # Boost Neuronal por Categoría (Flag A/B y Modo Sombra)
+    enable_neural_category_boost: bool = Field(default=True, alias="ENABLE_NEURAL_CATEGORY_BOOST")
+    neural_boost_shadow_mode: bool = Field(default=True, alias="NEURAL_BOOST_SHADOW_MODE")
+    neural_boost_weight: float = Field(default=0.10, alias="NEURAL_BOOST_WEIGHT")
+    neural_boost_min_confidence: float = Field(default=0.60, alias="NEURAL_BOOST_MIN_CONFIDENCE")
 
     @property
     def postgres_async_dsn(self) -> str:
