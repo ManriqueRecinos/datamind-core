@@ -7,6 +7,7 @@ from app.api.v1.routers.export import router as export_router
 from app.api.v1.routers.knowledge import router as knowledge_router
 from app.api.v1.routers.attachments import router as attachments_router
 from app.api.v1.routers.query_blueprint import router as query_blueprint_router
+from app.api.v1.neural_lab import router as neural_lab_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(chat_router)
@@ -15,3 +16,4 @@ api_router.include_router(knowledge_router)
 api_router.include_router(export_router)
 api_router.include_router(attachments_router)
 api_router.include_router(query_blueprint_router)
+api_router.include_router(neural_lab_router)

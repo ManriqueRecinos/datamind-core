@@ -52,3 +52,6 @@ ehthumbs.db
 .opencode/
 reporte_test.xlsx
 datamind_report_*.xlsx
+
+# Modelos entrenados de Neural Lab
+storage/neural_lab/
